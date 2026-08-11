@@ -596,6 +596,56 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   flex-wrap:wrap;
 }
 .cover-upload-btn{display:inline-flex;align-items:center;}
+
+/* THEME SETTINGS */
+.settings-section-label{
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:0.8px;
+  color:var(--muted);
+  margin:16px 0 10px;
+}
+.settings-section-label:first-child{margin-top:0;}
+.theme-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(110px, 1fr));
+  gap:10px;
+}
+.theme-swatch{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:6px;
+  padding:10px 8px;
+  border-radius:8px;
+  border:1px solid var(--border);
+  background:var(--surface-alt);
+  cursor:pointer;
+  transition:border-color .12s;
+}
+.theme-swatch:hover{border-color:var(--gold);}
+.theme-swatch.active{border-color:var(--gold); box-shadow:0 0 0 1px var(--gold);}
+.theme-swatch .dots{display:flex;gap:4px;}
+.theme-swatch .dot-lg{width:16px;height:16px;border-radius:50%;border:1px solid rgba(255,255,255,0.15);}
+.theme-swatch .swatch-label{font-size:11px;color:var(--text);}
+.color-input-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:8px 0;
+}
+.color-input-row label{font-size:13px;color:var(--text);}
+.color-input-row input[type="color"]{
+  width:40px;
+  height:32px;
+  padding:0;
+  border:1px solid var(--border);
+  border-radius:6px;
+  background:none;
+  cursor:pointer;
+}
+.settings-note{font-size:12px;color:var(--muted);margin-top:14px;line-height:1.5;}
 </style>
 </head>
 <body>
@@ -626,6 +676,9 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
       <button id="viewGridBtn" class="active">Grid</button>
       <button id="viewListBtn">List</button>
     </div>
+    <button class="btn btn-ghost" id="settingsBtn" title="Theme settings" aria-label="Theme settings">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
     <button class="btn btn-primary" id="showAddBtn">+ Add series</button>
   </div>
 
@@ -640,6 +693,10 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 
 <div class="overlay" id="overlay">
   <div class="modal" id="modal"></div>
+</div>
+
+<div class="overlay" id="settingsOverlay">
+  <div class="modal" id="settingsModal"></div>
 </div>
 
 <div id="tooltip"></div>
@@ -1454,6 +1511,7 @@ document.getElementById('overlay').addEventListener('click', (e)=>{
 document.addEventListener('keydown', (e)=>{
   if(e.key==='Escape'){
     if(volMenuEl) closeVolumeMenu();
+    else if(document.getElementById('settingsOverlay').classList.contains('open')) closeSettings();
     else if(modalId) closeModal();
   }
 });
@@ -1525,7 +1583,115 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
   document.getElementById('new-name').focus();
 });
 
-loadEntries();
+/* ============================================================
+   THEME SETTINGS
+   Only the two accent colors are customizable (the "gold" and
+   "red" identity colors used throughout). Blue/green stay fixed
+   since they carry meaning (ordered / complete) rather than being
+   decorative - changing those would make the app harder to read,
+   not easier to personalize.
+   Saved per-device via Storage, same as everything else - so if
+   this same link is shared, each person's color choice is theirs
+   alone and never affects anyone else.
+   ============================================================ */
+const THEME_PRESETS = [
+  {name:'Ink & Gold (default)', gold:'#c9a227', red:'#b3311f'},
+  {name:'Ocean', gold:'#4fb3bf', red:'#2a6f97'},
+  {name:'Forest', gold:'#8faa4b', red:'#3f6b3f'},
+  {name:'Amethyst', gold:'#b98ce0', red:'#7a3fa0'},
+  {name:'Sakura', gold:'#e8a0bf', red:'#c2447a'},
+  {name:'Ember', gold:'#e08a3c', red:'#a8321f'},
+];
+let currentTheme = {gold: THEME_PRESETS[0].gold, red: THEME_PRESETS[0].red};
+
+function applyTheme(theme){
+  document.documentElement.style.setProperty('--gold', theme.gold);
+  document.documentElement.style.setProperty('--red', theme.red);
+  currentTheme = theme;
+}
+
+async function loadTheme(){
+  try{
+    const raw = await Storage.get('theme', false);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      if(parsed && parsed.gold && parsed.red) applyTheme(parsed);
+    }
+  }catch(e){ /* keep default */ }
+}
+
+async function saveTheme(theme){
+  applyTheme(theme);
+  try{ await Storage.set('theme', JSON.stringify(theme), false); }catch(e){ /* stays applied for this session at least */ }
+}
+
+function isPresetActive(preset){
+  return preset.gold.toLowerCase() === currentTheme.gold.toLowerCase()
+      && preset.red.toLowerCase() === currentTheme.red.toLowerCase();
+}
+
+function renderSettings(){
+  const modal = document.getElementById('settingsModal');
+  modal.innerHTML = `
+    <button class="modal-close" id="settingsCloseBtn">&times;</button>
+    <div class="name-block"><span class="name">Theme</span></div>
+    <div class="settings-section-label">Presets</div>
+    <div class="theme-grid" id="themeGrid">
+      ${THEME_PRESETS.map((p, i) => `
+        <div class="theme-swatch ${isPresetActive(p) ? 'active' : ''}" data-idx="${i}">
+          <div class="dots">
+            <span class="dot-lg" style="background:${p.gold}"></span>
+            <span class="dot-lg" style="background:${p.red}"></span>
+          </div>
+          <span class="swatch-label">${p.name}</span>
+        </div>
+      `).join('')}
+    </div>
+    <div class="settings-section-label">Custom colors</div>
+    <div class="color-input-row">
+      <label for="customGold">Primary accent</label>
+      <input type="color" id="customGold" value="${currentTheme.gold}">
+    </div>
+    <div class="color-input-row">
+      <label for="customRed">Secondary accent</label>
+      <input type="color" id="customRed" value="${currentTheme.red}">
+    </div>
+    <p class="settings-note">This only changes colors on this device. If you share this app's link with anyone, their color choice is separate from yours.</p>
+  `;
+  document.getElementById('settingsCloseBtn').addEventListener('click', closeSettings);
+  modal.querySelectorAll('.theme-swatch').forEach(sw=>{
+    sw.addEventListener('click', async ()=>{
+      const preset = THEME_PRESETS[Number(sw.dataset.idx)];
+      await saveTheme({gold: preset.gold, red: preset.red});
+      renderSettings();
+    });
+  });
+  const goldInput = document.getElementById('customGold');
+  const redInput = document.getElementById('customRed');
+  goldInput.addEventListener('input', async ()=>{
+    await saveTheme({gold: goldInput.value, red: currentTheme.red});
+    renderSettings();
+  });
+  redInput.addEventListener('input', async ()=>{
+    await saveTheme({gold: currentTheme.gold, red: redInput.value});
+    renderSettings();
+  });
+}
+
+function openSettings(){
+  renderSettings();
+  document.getElementById('settingsOverlay').classList.add('open');
+}
+function closeSettings(){
+  document.getElementById('settingsOverlay').classList.remove('open');
+}
+
+document.getElementById('settingsBtn').addEventListener('click', openSettings);
+document.getElementById('settingsOverlay').addEventListener('click', (e)=>{
+  if(e.target.id==='settingsOverlay') closeSettings();
+});
+
+loadTheme().then(loadEntries);
 
 // Register the service worker for offline/installable behavior.
 // This only does anything when the app is hosted over HTTPS (or on
