@@ -1168,8 +1168,6 @@ try{
 let authUser = null;      // the signed-in Supabase user, or null
 let isTutorial = false;   // true while browsing the example tutorial data
 
-const COVER_PREFIX = 'cover:'; // still used by the theme/local fallback path only
-
 function countOwned(e){ return e.volumes.filter(v=>v==='owned').length; }
 function countOrdered(e){ return e.volumes.filter(v=>v==='ordered').length; }
 function countSecured(e){ return e.volumes.filter(v=>v!=='missing').length; }
