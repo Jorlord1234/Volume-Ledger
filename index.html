@@ -645,7 +645,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   background:linear-gradient(to right, var(--red), var(--gold));
 }
 .auth-field{margin-bottom:10px;}
-.auth-field input[type="email"], .auth-field input[type="password"]{
+.auth-field input[type="email"], .auth-field input[type="password"], .auth-field input[type="text"]{
   width:100%;
   background:var(--surface-alt);
   border:1px solid var(--border);
@@ -654,6 +654,23 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   padding:10px 12px;
   font-size:14px;
 }
+.auth-password-field{position:relative;}
+.auth-password-field input{padding-right:40px !important;}
+.auth-eye-btn{
+  position:absolute;
+  right:6px;top:50%;
+  transform:translateY(-50%);
+  background:none;
+  border:none;
+  padding:6px;
+  border-radius:6px;
+  color:var(--muted);
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+}
+.auth-eye-btn:hover{color:var(--text);background:var(--surface);}
+.auth-eye-btn.active{color:var(--gold);}
 .auth-error{
   background:rgba(179,49,31,0.12);
   border:1px solid var(--red);
@@ -1170,17 +1187,6 @@ try{
 
 let authUser = null;      // the signed-in Supabase user, or null
 let isTutorial = false;   // true while browsing the example tutorial data
-
-function countOwned(e){ return e.volumes.filter(v=>v==='owned').length; }
-function countOrdered(e){ return e.volumes.filter(v=>v==='ordered').length; }
-function countSecured(e){ return e.volumes.filter(v=>v!=='missing').length; }
-function isComplete(e){ return e.status==='completed' && e.total>0 && countSecured(e)>=e.total; }
-
-function hashHue(str){
-  let h=0;
-  for(let i=0;i<str.length;i++) h = str.charCodeAt(i) + ((h<<5)-h);
-  return Math.abs(h)%360;
-}
 
 /* ============================================================
    TUTORIAL DATA
@@ -1987,33 +1993,35 @@ function showAuthError(message){
   el.style.display = message ? 'block' : 'none';
 }
 
-let authMode = 'signin'; // 'signin' | 'signup'
-
 function renderAuthForm(){
   const area = document.getElementById('authFormArea');
   area.innerHTML = `
     <div class="auth-field">
       <input type="text" id="authName" placeholder="Name" autocomplete="username">
     </div>
-    <div class="auth-field">
-      <input type="password" id="authPassword" placeholder="Password" autocomplete="${authMode==='signup'?'new-password':'current-password'}">
+    <div class="auth-field auth-password-field">
+      <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password">
+      <button type="button" class="auth-eye-btn" id="authEyeBtn" aria-label="Show password">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
     </div>
-    <button class="btn btn-primary" id="authSubmitBtn" style="width:100%;">
-      ${authMode==='signup' ? 'Create account' : 'Log in'}
-    </button>
+    <button class="btn btn-primary" id="authSubmitBtn" style="width:100%;">Continue</button>
+    <p class="settings-note" style="margin-top:10px;text-align:center;">
+      First time? This creates your account. Already have one? This logs you in.
+    </p>
   `;
   document.getElementById('authSubmitBtn').addEventListener('click', handleAuthSubmit);
   document.getElementById('authPassword').addEventListener('keydown', (e)=>{ if(e.key==='Enter') handleAuthSubmit(); });
-  const switchLine = document.getElementById('authSwitchLine');
-  switchLine.innerHTML = authMode==='signup'
-    ? `Already have an account? <a href="#" id="authSwitchLink">Log in</a>`
-    : `New here? <a href="#" id="authSwitchLink">Create an account</a>`;
-  document.getElementById('authSwitchLink').addEventListener('click', (e)=>{
-    e.preventDefault();
-    authMode = authMode==='signup' ? 'signin' : 'signup';
-    showAuthError('');
-    renderAuthForm();
+  document.getElementById('authEyeBtn').addEventListener('click', ()=>{
+    const pwInput = document.getElementById('authPassword');
+    const eyeBtn = document.getElementById('authEyeBtn');
+    const showing = pwInput.type === 'text';
+    pwInput.type = showing ? 'password' : 'text';
+    eyeBtn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+    eyeBtn.classList.toggle('active', !showing);
   });
+  const switchLine = document.getElementById('authSwitchLine');
+  if(switchLine) switchLine.style.display = 'none';
 }
 
 async function handleAuthSubmit(){
@@ -2032,18 +2040,20 @@ async function handleAuthSubmit(){
   const btn = document.getElementById('authSubmitBtn');
   btn.disabled = true;
   try{
-    if(authMode === 'signup'){
-      const { data, error } = await supabaseClient.auth.signUp({ email, password });
-      if(error) throw error;
-      if(data.user && !data.session){
-        showAuthError("Account created. If your Supabase project still has email confirmation turned on, turn it off in Authentication settings, then log in.");
-      } else if(data.session){
-        await enterApp(data.user);
-      }
-    } else {
-      const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
-      if(error) throw error;
+    // Try logging in first...
+    const signInResult = await supabaseClient.auth.signInWithPassword({ email, password });
+    if(signInResult.data && signInResult.data.session){
+      await enterApp(signInResult.data.user);
+      btn.disabled = false;
+      return;
+    }
+    // ...if that fails because no account exists yet, create one instead.
+    const { data, error } = await supabaseClient.auth.signUp({ email, password });
+    if(error) throw error;
+    if(data.session){
       await enterApp(data.user);
+    } else if(data.user){
+      showAuthError("Account created, but couldn't log you in automatically. If your Supabase project still has email confirmation turned on, turn it off in Authentication settings, then hit Continue again.");
     }
   }catch(e){
     showAuthError(e.message || 'Something went wrong. Check your name and password and try again.');
