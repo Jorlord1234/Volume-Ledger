@@ -765,7 +765,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .settings-note{font-size:12px;color:var(--muted);margin-top:14px;line-height:1.5;}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
   // ============================================================
   // FILL THESE TWO IN before hosting the app.
@@ -792,8 +792,6 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
     <div id="authError" class="auth-error" style="display:none;"></div>
 
     <div id="authFormArea"></div>
-
-    <div class="auth-divider"><span>or</span></div>
 
     <button class="btn btn-ghost auth-passkey-btn" id="passkeySigninBtn">
       Sign in with a passkey
@@ -1155,13 +1153,18 @@ function hashHue(str){
    ============================================================ */
 let supabaseClient = null;
 let supabaseConfigured = false;
+let supabaseLibraryMissing = false;
 try{
-  if(window.SUPABASE_URL && window.SUPABASE_ANON_KEY &&
+  const hasCredentials = window.SUPABASE_URL && window.SUPABASE_ANON_KEY &&
      !window.SUPABASE_URL.includes('YOUR_SUPABASE') &&
-     !window.SUPABASE_ANON_KEY.includes('YOUR_SUPABASE') &&
-     window.supabase){
-    supabaseClient = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
-    supabaseConfigured = true;
+     !window.SUPABASE_ANON_KEY.includes('YOUR_SUPABASE');
+  if(hasCredentials){
+    if(window.supabase){
+      supabaseClient = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+      supabaseConfigured = true;
+    } else {
+      supabaseLibraryMissing = true;
+    }
   }
 }catch(e){ supabaseConfigured = false; }
 
@@ -2152,8 +2155,12 @@ async function boot(){
   await loadTheme();
   renderAuthForm();
 
+  if(supabaseLibraryMissing){
+    showAuthError("The account system's library didn't load (likely a connection problem loading it from the internet). Try refreshing.");
+    return;
+  }
   if(!supabaseConfigured){
-    showAuthError("This app isn't connected to an account backend yet. Open account settings need to be finished first - see the setup instructions.");
+    showAuthError("This app isn't connected to an account backend yet. See the setup instructions.");
     return;
   }
 
