@@ -334,6 +334,8 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   border-radius:10px;
   padding:22px 18px 16px;
   margin-bottom:20px;
+  max-width:100%;
+  box-sizing:border-box;
 }
 #addRow::before{
   content:'新 New Entry';
@@ -355,6 +357,8 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   gap:8px;
   align-items:center;
 }
+.edit-grid > *{ min-width:0; }
+.edit-grid input, .edit-grid select, .edit-grid textarea{ min-width:0; max-width:100%; box-sizing:border-box; }
 .edit-grid textarea{grid-column:1/-1;min-height:44px;resize:vertical;}
 .edit-actions{grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;margin-top:4px;}
 
@@ -613,7 +617,10 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   gap:8px;
   margin-top:4px;
   flex-wrap:wrap;
+  max-width:100%;
 }
+.cover-editor > *{ min-width:0; }
+.cover-editor span{ overflow-wrap:anywhere; word-break:break-word; }
 .cover-upload-btn{display:inline-flex;align-items:center;}
 
 /* AUTH GATE */
@@ -804,7 +811,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
       <span class="kanji">巻</span>
       <h1 style="font-size:26px;">The Volume Ledger</h1>
     </div>
-    <p class="subtitle" style="margin-bottom:22px;">Your manga collection, volume by volume.</p>
+    <p class="subtitle" style="margin-bottom:22px;">Your book collection, volume by volume.</p>
 
     <div id="authError" class="auth-error" style="display:none;"></div>
 
@@ -832,7 +839,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
       <span class="kanji">巻</span>
       <h1>The Volume Ledger</h1>
     </div>
-    <p class="subtitle">Your manga collection, volume by volume.</p>
+    <p class="subtitle">Your book collection, volume by volume.</p>
   </header>
 
   <div id="storageNotice" style="display:none;"></div>
@@ -856,7 +863,6 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </button>
     <button class="btn btn-primary" id="showAddBtn">+ Add series</button>
-    <button class="btn btn-ghost account-btn" id="accountBtn">Account</button>
   </div>
 
   <div id="addRow" style="display:none;"></div>
@@ -1177,7 +1183,9 @@ try{
      !window.SUPABASE_ANON_KEY.includes('YOUR_SUPABASE');
   if(hasCredentials){
     if(window.supabase){
-      supabaseClient = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+      supabaseClient = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+        auth: { experimental: { passkey: true } }
+      });
       supabaseConfigured = true;
     } else {
       supabaseLibraryMissing = true;
@@ -1226,15 +1234,7 @@ async function loadRealCollection(){
       .eq('user_id', authUser.id)
       .maybeSingle();
     if(error) throw error;
-
-    if(!data){
-      // Brand new account with no collection row yet - offer the
-      // built-in starter collection, opt-in only. New users are
-      // never handed this automatically.
-      await offerStarterCollection();
-    } else {
-      entries = Array.isArray(data.entries) ? data.entries : [];
-    }
+    entries = (data && Array.isArray(data.entries)) ? data.entries : [];
   }catch(e){
     showSyncNotice("Could not reach your account's data just now. Showing an empty collection - nothing has been lost, try refreshing.");
     entries = [];
@@ -1242,43 +1242,6 @@ async function loadRealCollection(){
   entries.forEach(ensureVolumes);
   await preloadCoversFromSupabase();
   render();
-}
-
-async function offerStarterCollection(){
-  return new Promise((resolve)=>{
-    const overlay = document.createElement('div');
-    overlay.className = 'overlay open';
-    overlay.id = 'starterOverlay';
-    overlay.innerHTML = `
-      <div class="modal" style="max-width:440px;">
-        <div class="name-block" style="margin-bottom:10px;"><span class="name">Starter collection</span></div>
-        <p style="font-size:14px;color:var(--muted);line-height:1.6;">
-          This app was originally built with an example 18-series collection already in it.
-          Import that into your new account, or start with a completely empty one - your choice.
-        </p>
-        <div class="edit-actions" style="margin-top:18px;">
-          <button class="btn btn-ghost" id="skipStarterBtn">Start empty</button>
-          <button class="btn btn-primary" id="importStarterBtn">Import starter collection</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-    document.getElementById('skipStarterBtn').addEventListener('click', async ()=>{
-      entries = [];
-      await saveEntries();
-      overlay.remove();
-      resolve();
-    });
-    document.getElementById('importStarterBtn').addEventListener('click', async ()=>{
-      entries = JSON.parse(JSON.stringify(seedData));
-      await saveEntries();
-      await Promise.all(Object.entries(BUNDLED_COVERS_MAP).map(([id, dataUri]) =>
-        saveCoverRemote(id, dataUri)
-      ));
-      overlay.remove();
-      resolve();
-    });
-  });
 }
 
 async function preloadCoversFromSupabase(){
@@ -1934,7 +1897,18 @@ function renderSettings(){
       <input type="color" id="customRed" value="${currentTheme.red}">
     </div>
     <p class="settings-note">This only changes colors on this device. If you share this app's link with anyone, their color choice is separate from yours.</p>
+
+    <div class="settings-section-label">Account</div>
+    <div class="edit-actions" style="justify-content:flex-start;flex-wrap:wrap;">
+      <button class="btn btn-ghost" id="settingsAddPasskeyBtn">Add a passkey to this account</button>
+      <button class="btn btn-ghost" id="settingsSignOutBtn">Sign out</button>
+    </div>
   `;
+  document.getElementById('settingsAddPasskeyBtn').addEventListener('click', addPasskeyToAccount);
+  document.getElementById('settingsSignOutBtn').addEventListener('click', ()=>{
+    closeSettings();
+    signOutOfAccount();
+  });
   document.getElementById('settingsCloseBtn').addEventListener('click', closeSettings);
   modal.querySelectorAll('.theme-swatch').forEach(sw=>{
     sw.addEventListener('click', async ()=>{
@@ -1993,6 +1967,8 @@ function showAuthError(message){
   el.style.display = message ? 'block' : 'none';
 }
 
+let authMode = 'signin'; // 'signin' | 'signup'
+
 function renderAuthForm(){
   const area = document.getElementById('authFormArea');
   area.innerHTML = `
@@ -2000,15 +1976,14 @@ function renderAuthForm(){
       <input type="text" id="authName" placeholder="Name" autocomplete="username">
     </div>
     <div class="auth-field auth-password-field">
-      <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password">
+      <input type="password" id="authPassword" placeholder="Password" autocomplete="${authMode==='signup'?'new-password':'current-password'}">
       <button type="button" class="auth-eye-btn" id="authEyeBtn" aria-label="Show password">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
     </div>
-    <button class="btn btn-primary" id="authSubmitBtn" style="width:100%;">Continue</button>
-    <p class="settings-note" style="margin-top:10px;text-align:center;">
-      First time? This creates your account. Already have one? This logs you in.
-    </p>
+    <button class="btn btn-primary" id="authSubmitBtn" style="width:100%;">
+      ${authMode==='signup' ? 'Create account' : 'Log in'}
+    </button>
   `;
   document.getElementById('authSubmitBtn').addEventListener('click', handleAuthSubmit);
   document.getElementById('authPassword').addEventListener('keydown', (e)=>{ if(e.key==='Enter') handleAuthSubmit(); });
@@ -2021,7 +1996,18 @@ function renderAuthForm(){
     eyeBtn.classList.toggle('active', !showing);
   });
   const switchLine = document.getElementById('authSwitchLine');
-  if(switchLine) switchLine.style.display = 'none';
+  if(switchLine){
+    switchLine.style.display = '';
+    switchLine.innerHTML = authMode==='signup'
+      ? `Already have an account? <a href="#" id="authSwitchLink">Log in</a>`
+      : `New here? <a href="#" id="authSwitchLink">Create an account</a>`;
+    document.getElementById('authSwitchLink').addEventListener('click', (e)=>{
+      e.preventDefault();
+      authMode = authMode==='signup' ? 'signin' : 'signup';
+      showAuthError('');
+      renderAuthForm();
+    });
+  }
 }
 
 async function handleAuthSubmit(){
@@ -2040,20 +2026,18 @@ async function handleAuthSubmit(){
   const btn = document.getElementById('authSubmitBtn');
   btn.disabled = true;
   try{
-    // Try logging in first...
-    const signInResult = await supabaseClient.auth.signInWithPassword({ email, password });
-    if(signInResult.data && signInResult.data.session){
-      await enterApp(signInResult.data.user);
-      btn.disabled = false;
-      return;
-    }
-    // ...if that fails because no account exists yet, create one instead.
-    const { data, error } = await supabaseClient.auth.signUp({ email, password });
-    if(error) throw error;
-    if(data.session){
+    if(authMode === 'signup'){
+      const { data, error } = await supabaseClient.auth.signUp({ email, password });
+      if(error) throw error;
+      if(data.session){
+        await enterApp(data.user);
+      } else if(data.user){
+        showAuthError("Account created. If your Supabase project still has email confirmation turned on, turn it off in Authentication settings, then log in.");
+      }
+    } else {
+      const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+      if(error) throw error;
       await enterApp(data.user);
-    } else if(data.user){
-      showAuthError("Account created, but couldn't log you in automatically. If your Supabase project still has email confirmation turned on, turn it off in Authentication settings, then hit Continue again.");
     }
   }catch(e){
     showAuthError(e.message || 'Something went wrong. Check your name and password and try again.');
@@ -2129,33 +2113,30 @@ document.getElementById('exitTutorialBtn').addEventListener('click', ()=>{
 });
 
 /* ============================================================
-   ACCOUNT MENU (sign out, add a passkey to an existing account)
+   ACCOUNT ACTIONS (called from the Settings panel)
    ============================================================ */
-document.getElementById('accountBtn').addEventListener('click', ()=>{
-  if(!authUser) return;
-  const wantsPasskey = confirm(
-    "Signed in.\n\nOK = Add a passkey to this account (for faster Face ID sign-in next time)\nCancel = Sign out"
-  );
-  if(wantsPasskey){
-    addPasskeyToAccount();
-  } else {
-    supabaseClient.auth.signOut().then(()=>{
-      entries = [];
-      coverCache = {};
-      showAuthGateUI();
-    });
-  }
-});
-
 async function addPasskeyToAccount(){
   try{
-    // Also Beta in Supabase - method name may change, see note above.
-    const { error } = await supabaseClient.auth.enrollPasskey();
+    // Beta Supabase feature - correct method is registerPasskey().
+    // Also requires Authentication -> Passkeys to be turned on in the
+    // Supabase dashboard, with this site's exact origin listed under
+    // "Relying Party Origins" - without that, this will fail even
+    // though nothing is wrong with the app itself.
+    const { error } = await supabaseClient.auth.registerPasskey();
     if(error) throw error;
     alert('Passkey added. You can now use "Sign in with a passkey" on this device.');
   }catch(e){
-    alert("Couldn't add a passkey (not supported in this browser, or not enabled on this Supabase project yet).");
+    alert("Couldn't add a passkey. Either this browser doesn't support passkeys, or Passkeys haven't been turned on yet in your Supabase project's Authentication settings.");
   }
+}
+
+function signOutOfAccount(){
+  if(!authUser || !supabaseClient) return;
+  supabaseClient.auth.signOut().then(()=>{
+    entries = [];
+    coverCache = {};
+    showAuthGateUI();
+  });
 }
 
 /* ============================================================
