@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#15161c">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -312,6 +312,9 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   .btn, .view-toggle button, select, input[type="text"]{
     min-height:40px;
   }
+  input[type="text"], input[type="email"], input[type="password"], select, textarea{
+    font-size:16px; /* iOS Safari auto-zooms on focus for any field under 16px */
+  }
   #showAddBtn{flex-basis:100%;}
   .view-toggle{flex:1;}
   .view-toggle button{flex:1;}
@@ -453,9 +456,25 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 .spines{
   display:flex;
   flex-wrap:wrap;
-  gap:2px;
+  gap:4px;
   margin-top:16px;
 }
+.spine-col{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:3px;
+}
+.spine-num{
+  font-family:'JetBrains Mono',monospace;
+  font-size:7px;
+  letter-spacing:-0.3px;
+  color:var(--muted);
+  line-height:1;
+  user-select:none;
+  opacity:0.75;
+}
+.spine-num.missing-num{color:var(--red);opacity:1;font-weight:600;}
 .spine{
   width:7px;
   height:24px;
@@ -755,8 +774,8 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   //   SUPABASE_ANON_KEY -> "anon public" key (NOT the service_role key -
   //                         that one must never appear in frontend code)
   // ============================================================
-  window.SUPABASE_URL = "YOUR_SUPABASE_PROJECT_URL_HERE";
-  window.SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY_HERE";
+  window.SUPABASE_URL = "https://ewixlmmxbyqbhbokifps.supabase.co";
+  window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV3aXhsbW14YnlxYmhib2tpZnBzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY1MTAxMTYsImV4cCI6MjEwMjA4NjExNn0.Ly16aMLD-xu-cveFnnTN4z-HWeacnlvT7QPwkYNPnz8";
 </script>
 </head>
 <body>
@@ -777,12 +796,13 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
     <div class="auth-divider"><span>or</span></div>
 
     <button class="btn btn-ghost auth-passkey-btn" id="passkeySigninBtn">
-      Sign in with a passkey (Face ID / Touch ID)
+      Sign in with a passkey
     </button>
 
     <p class="auth-switch" id="authSwitchLine">
       New here? <a href="#" id="authSwitchLink">Create an account</a>
     </p>
+    <a href="#" class="auth-tutorial-link" id="tutorialLink">Take a quick tutorial instead</a>
   </div>
 </div>
 
@@ -1418,7 +1438,10 @@ function renderCollection(){
 function spinesHTML(entry){
   const complete = isComplete(entry);
   return entry.volumes.map((status, idx)=>
-    `<div class="spine ${status!=='missing'?status:''} ${status==='owned'&&complete?'complete':''}" data-idx="${idx}"></div>`
+    `<div class="spine-col">
+      <div class="spine ${status!=='missing'?status:''} ${status==='owned'&&complete?'complete':''}" data-idx="${idx}"></div>
+      <span class="spine-num ${status==='missing'?'missing-num':''}">${idx+1}</span>
+    </div>`
   ).join('');
 }
 
@@ -1655,7 +1678,7 @@ function renderModal(){
     if(confirm(`Remove "${entry.name}" from your ledger?`)){
       entries = entries.filter(x=>x.id!==entry.id);
       delete coverCache[entry.id];
-      try{ await Storage.delete(COVER_PREFIX+entry.id, false); }catch(e){}
+      await deleteCoverRemote(entry.id);
       await saveEntries();
       closeModal();
       renderCollection();
@@ -1704,7 +1727,7 @@ function renderModal(){
       const dataUri = await readAndCompressImage(file);
       coverCache[entry.id] = dataUri;
       entry.hasCover = true;
-      await Storage.set(COVER_PREFIX+entry.id, dataUri, false);
+      await saveCoverRemote(entry.id, dataUri);
       await saveEntries();
       renderModal();
       renderCollection();
@@ -1717,7 +1740,7 @@ function renderModal(){
   if(removeCoverBtn) removeCoverBtn.addEventListener('click', async ()=>{
     delete coverCache[entry.id];
     entry.hasCover = false;
-    try{ await Storage.delete(COVER_PREFIX+entry.id, false); }catch(e){}
+    await deleteCoverRemote(entry.id);
     await saveEntries();
     renderModal();
     renderCollection();
@@ -1819,7 +1842,7 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
         const dataUri = await readAndCompressImage(pendingCoverFile);
         coverCache[entry.id] = dataUri;
         entry.hasCover = true;
-        await Storage.set(COVER_PREFIX+entry.id, dataUri, false);
+        await saveCoverRemote(entry.id, dataUri);
       }catch(err){ /* skip cover on failure */ }
     }
     entries.push(entry);
@@ -1938,7 +1961,219 @@ document.getElementById('settingsOverlay').addEventListener('click', (e)=>{
   if(e.target.id==='settingsOverlay') closeSettings();
 });
 
-loadTheme().then(loadEntries);
+/* ============================================================
+   AUTH
+   The app asks for a Name + Password, not an email - but Supabase
+   Auth's password sign-in is built around email addresses. So we
+   turn the name into a stable, fake-looking internal email behind
+   the scenes (e.g. "Joriam Deurloo" -> "joriam.deurloo@volumeledger.app").
+   This is invisible to the person using the app.
+
+   One honest limitation: since two different names could produce
+   the same slug (e.g. spacing/capitalization differences), names
+   effectively need to be unique per person the same way a username
+   would. That's a fair trade for "just a name and password," but
+   worth knowing.
+   ============================================================ */
+function nameToInternalEmail(name){
+  const slug = name.trim().toLowerCase().replace(/\s+/g, '.').replace(/[^a-z0-9.]/g, '');
+  return slug + '@volumeledger.app';
+}
+
+function showAuthError(message){
+  const el = document.getElementById('authError');
+  el.textContent = message;
+  el.style.display = message ? 'block' : 'none';
+}
+
+let authMode = 'signin'; // 'signin' | 'signup'
+
+function renderAuthForm(){
+  const area = document.getElementById('authFormArea');
+  area.innerHTML = `
+    <div class="auth-field">
+      <input type="text" id="authName" placeholder="Name" autocomplete="username">
+    </div>
+    <div class="auth-field">
+      <input type="password" id="authPassword" placeholder="Password" autocomplete="${authMode==='signup'?'new-password':'current-password'}">
+    </div>
+    <button class="btn btn-primary" id="authSubmitBtn" style="width:100%;">
+      ${authMode==='signup' ? 'Create account' : 'Log in'}
+    </button>
+  `;
+  document.getElementById('authSubmitBtn').addEventListener('click', handleAuthSubmit);
+  document.getElementById('authPassword').addEventListener('keydown', (e)=>{ if(e.key==='Enter') handleAuthSubmit(); });
+  const switchLine = document.getElementById('authSwitchLine');
+  switchLine.innerHTML = authMode==='signup'
+    ? `Already have an account? <a href="#" id="authSwitchLink">Log in</a>`
+    : `New here? <a href="#" id="authSwitchLink">Create an account</a>`;
+  document.getElementById('authSwitchLink').addEventListener('click', (e)=>{
+    e.preventDefault();
+    authMode = authMode==='signup' ? 'signin' : 'signup';
+    showAuthError('');
+    renderAuthForm();
+  });
+}
+
+async function handleAuthSubmit(){
+  showAuthError('');
+  if(!supabaseConfigured){
+    showAuthError("This app isn't connected to an account backend yet. See the setup instructions.");
+    return;
+  }
+  const name = document.getElementById('authName').value.trim();
+  const password = document.getElementById('authPassword').value;
+  if(!name || !password){
+    showAuthError('Enter a name and password.');
+    return;
+  }
+  const email = nameToInternalEmail(name);
+  const btn = document.getElementById('authSubmitBtn');
+  btn.disabled = true;
+  try{
+    if(authMode === 'signup'){
+      const { data, error } = await supabaseClient.auth.signUp({ email, password });
+      if(error) throw error;
+      if(data.user && !data.session){
+        showAuthError("Account created. If your Supabase project still has email confirmation turned on, turn it off in Authentication settings, then log in.");
+      } else if(data.session){
+        await enterApp(data.user);
+      }
+    } else {
+      const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+      if(error) throw error;
+      await enterApp(data.user);
+    }
+  }catch(e){
+    showAuthError(e.message || 'Something went wrong. Check your name and password and try again.');
+  }
+  btn.disabled = false;
+}
+
+async function handlePasskeySignin(){
+  showAuthError('');
+  if(!supabaseConfigured){
+    showAuthError("This app isn't connected to an account backend yet. See the setup instructions.");
+    return;
+  }
+  try{
+    // Passkey support in Supabase is in Beta at the time this was
+    // written, so the exact method name may have moved on - check
+    // Supabase's current passkey docs if this throws unexpectedly.
+    const { data, error } = await supabaseClient.auth.signInWithPasskey();
+    if(error) throw error;
+    await enterApp(data.user);
+  }catch(e){
+    showAuthError("Passkey sign-in didn't work (not set up yet, or not supported in this browser). Use your name and password instead.");
+  }
+}
+
+document.getElementById('passkeySigninBtn').addEventListener('click', handlePasskeySignin);
+
+document.getElementById('tutorialLink').addEventListener('click', (e)=>{
+  e.preventDefault();
+  enterTutorial();
+});
+
+/* ============================================================
+   MODE SWITCHING: auth gate <-> tutorial <-> real app
+   ============================================================ */
+function showAuthGateUI(){
+  authUser = null;
+  isTutorial = false;
+  document.getElementById('authGate').style.display = 'flex';
+  document.getElementById('tutorialBanner').style.display = 'none';
+  document.getElementById('mainApp').style.display = 'none';
+  showAuthError('');
+  renderAuthForm();
+}
+
+function enterTutorial(){
+  isTutorial = true;
+  authUser = null;
+  entries = buildTutorialData();
+  coverCache = {};
+  document.getElementById('authGate').style.display = 'none';
+  document.getElementById('tutorialBanner').style.display = 'flex';
+  document.getElementById('mainApp').style.display = 'block';
+  render();
+}
+
+async function enterApp(user){
+  authUser = user;
+  isTutorial = false;
+  document.getElementById('authGate').style.display = 'none';
+  document.getElementById('tutorialBanner').style.display = 'none';
+  document.getElementById('mainApp').style.display = 'block';
+  await loadRealCollection();
+}
+
+document.getElementById('exitTutorialBtn').addEventListener('click', ()=>{
+  isTutorial = false;
+  entries = [];
+  coverCache = {};
+  showAuthGateUI();
+  authMode = 'signup';
+  renderAuthForm();
+});
+
+/* ============================================================
+   ACCOUNT MENU (sign out, add a passkey to an existing account)
+   ============================================================ */
+document.getElementById('accountBtn').addEventListener('click', ()=>{
+  if(!authUser) return;
+  const wantsPasskey = confirm(
+    "Signed in.\n\nOK = Add a passkey to this account (for faster Face ID sign-in next time)\nCancel = Sign out"
+  );
+  if(wantsPasskey){
+    addPasskeyToAccount();
+  } else {
+    supabaseClient.auth.signOut().then(()=>{
+      entries = [];
+      coverCache = {};
+      showAuthGateUI();
+    });
+  }
+});
+
+async function addPasskeyToAccount(){
+  try{
+    // Also Beta in Supabase - method name may change, see note above.
+    const { error } = await supabaseClient.auth.enrollPasskey();
+    if(error) throw error;
+    alert('Passkey added. You can now use "Sign in with a passkey" on this device.');
+  }catch(e){
+    alert("Couldn't add a passkey (not supported in this browser, or not enabled on this Supabase project yet).");
+  }
+}
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+async function boot(){
+  await loadTheme();
+  renderAuthForm();
+
+  if(!supabaseConfigured){
+    showAuthError("This app isn't connected to an account backend yet. Open account settings need to be finished first - see the setup instructions.");
+    return;
+  }
+
+  try{
+    const { data } = await supabaseClient.auth.getSession();
+    if(data && data.session && data.session.user){
+      await enterApp(data.session.user);
+    }
+  }catch(e){ /* just show the sign-in form */ }
+
+  supabaseClient.auth.onAuthStateChange((event, session)=>{
+    if(event === 'SIGNED_OUT'){
+      showAuthGateUI();
+    }
+  });
+}
+
+boot();
 
 // Register the service worker for offline/installable behavior.
 // This only does anything when the app is hosted over HTTPS (or on
