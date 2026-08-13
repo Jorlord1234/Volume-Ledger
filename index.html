@@ -1944,15 +1944,7 @@ function renderSettings(){
     </div>
     <p class="settings-note">This only changes colors on this device. If you share this app's link with anyone, their color choice is separate from yours.</p>
 
-    <div class="settings-section-label">Starter collection (temporary)</div>
-    <p class="settings-note" style="margin-top:0;">Adds the built-in 18-series example collection to whatever's already in this account. Safe to use more than once - it never replaces or removes anything, only adds.</p>
-    <button class="btn btn-ghost" id="settingsImportStarterBtn" style="width:100%;margin-bottom:14px;">Import starter collection</button>
-
     <div class="settings-section-label">Account</div>
-    <div class="auth-field">
-      <input type="email" id="settingsNewEmail" placeholder="New email address">
-    </div>
-    <button class="btn btn-ghost" id="settingsUpdateEmailBtn" style="width:100%;margin-bottom:12px;">Update email</button>
     <div class="auth-field auth-password-field">
       <input type="password" id="settingsNewPassword" placeholder="New password">
       <button type="button" class="auth-eye-btn" id="settingsPwEyeBtn" aria-label="Show password">
@@ -1970,21 +1962,6 @@ function renderSettings(){
     const pwInput = document.getElementById('settingsNewPassword');
     pwInput.type = pwInput.type === 'text' ? 'password' : 'text';
   });
-  document.getElementById('settingsUpdateEmailBtn').addEventListener('click', async ()=>{
-    const newEmail = document.getElementById('settingsNewEmail').value.trim();
-    if(!newEmail){ showAccountMsg('Enter a new email address.'); return; }
-    try{
-      const redirectTo = window.location.href.split('#')[0].split('?')[0];
-      const { error } = await supabaseClient.auth.updateUser(
-        { email: newEmail },
-        { emailRedirectTo: redirectTo }
-      );
-      if(error) throw error;
-      showAccountMsg('Check your new email for a confirmation link to finish this change.');
-    }catch(e){
-      showAccountMsg(e.message || "Couldn't update email.");
-    }
-  });
   document.getElementById('settingsUpdatePasswordBtn').addEventListener('click', async ()=>{
     const newPw = document.getElementById('settingsNewPassword').value;
     if(!newPw){ showAccountMsg('Enter a new password.'); return; }
@@ -1997,7 +1974,6 @@ function renderSettings(){
       showAccountMsg(e.message || "Couldn't update password.");
     }
   });
-  document.getElementById('settingsImportStarterBtn').addEventListener('click', importStarterCollection);
   document.getElementById('settingsSignOutBtn').addEventListener('click', ()=>{
     closeSettings();
     signOutOfAccount();
@@ -2236,29 +2212,6 @@ document.getElementById('exitTutorialBtn').addEventListener('click', ()=>{
 /* ============================================================
    ACCOUNT ACTIONS (called from the Settings panel)
    ============================================================ */
-async function importStarterCollection(){
-  const ok = confirm('Add the built-in starter collection (18 example series) to your current collection?');
-  if(!ok) return;
-  const additions = seedData.map(original => {
-    const copy = JSON.parse(JSON.stringify(original));
-    const newId = uid();
-    copy.id = newId;
-    return { originalId: original.id, entry: copy };
-  });
-  entries = entries.concat(additions.map(a => a.entry));
-  await saveEntries();
-  for(const { originalId, entry } of additions){
-    if(entry.hasCover && BUNDLED_COVERS_MAP[originalId]){
-      const dataUri = BUNDLED_COVERS_MAP[originalId];
-      coverCache[entry.id] = dataUri;
-      await saveCoverRemote(entry.id, dataUri);
-    }
-  }
-  closeSettings();
-  renderCollection();
-  alert('Starter collection imported.');
-}
-
 function signOutOfAccount(){
   if(!authUser || !supabaseClient) return;
   supabaseClient.auth.signOut().then(()=>{
