@@ -701,7 +701,6 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   height:1px;
   background:var(--border);
 }
-.auth-passkey-btn{width:100%;text-align:center;}
 .auth-switch{
   text-align:center;
   font-size:13px;
@@ -816,10 +815,6 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
     <div id="authError" class="auth-error" style="display:none;"></div>
 
     <div id="authFormArea"></div>
-
-    <button class="btn btn-ghost auth-passkey-btn" id="passkeySigninBtn">
-      Sign in with a passkey
-    </button>
 
     <p class="auth-switch" id="authSwitchLine">
       New here? <a href="#" id="authSwitchLink">Create an account</a>
@@ -1183,9 +1178,7 @@ try{
      !window.SUPABASE_ANON_KEY.includes('YOUR_SUPABASE');
   if(hasCredentials){
     if(window.supabase){
-      supabaseClient = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
-        auth: { experimental: { passkey: true } }
-      });
+      supabaseClient = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
       supabaseConfigured = true;
     } else {
       supabaseLibraryMissing = true;
@@ -1900,11 +1893,9 @@ function renderSettings(){
 
     <div class="settings-section-label">Account</div>
     <div class="edit-actions" style="justify-content:flex-start;flex-wrap:wrap;">
-      <button class="btn btn-ghost" id="settingsAddPasskeyBtn">Add a passkey to this account</button>
       <button class="btn btn-ghost" id="settingsSignOutBtn">Sign out</button>
     </div>
   `;
-  document.getElementById('settingsAddPasskeyBtn').addEventListener('click', addPasskeyToAccount);
   document.getElementById('settingsSignOutBtn').addEventListener('click', ()=>{
     closeSettings();
     signOutOfAccount();
@@ -1972,21 +1963,25 @@ let authMode = 'signin'; // 'signin' | 'signup'
 function renderAuthForm(){
   const area = document.getElementById('authFormArea');
   area.innerHTML = `
-    <div class="auth-field">
-      <input type="text" id="authName" placeholder="Name" autocomplete="username">
-    </div>
-    <div class="auth-field auth-password-field">
-      <input type="password" id="authPassword" placeholder="Password" autocomplete="${authMode==='signup'?'new-password':'current-password'}">
-      <button type="button" class="auth-eye-btn" id="authEyeBtn" aria-label="Show password">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+    <form id="authFormEl" autocomplete="on">
+      <div class="auth-field">
+        <input type="text" id="authName" name="username" placeholder="Name" autocomplete="username">
+      </div>
+      <div class="auth-field auth-password-field">
+        <input type="password" id="authPassword" name="password" placeholder="Password" autocomplete="${authMode==='signup'?'new-password':'current-password'}">
+        <button type="button" class="auth-eye-btn" id="authEyeBtn" aria-label="Show password">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+      <button type="submit" class="btn btn-primary" id="authSubmitBtn" style="width:100%;">
+        ${authMode==='signup' ? 'Create account' : 'Log in'}
       </button>
-    </div>
-    <button class="btn btn-primary" id="authSubmitBtn" style="width:100%;">
-      ${authMode==='signup' ? 'Create account' : 'Log in'}
-    </button>
+    </form>
   `;
-  document.getElementById('authSubmitBtn').addEventListener('click', handleAuthSubmit);
-  document.getElementById('authPassword').addEventListener('keydown', (e)=>{ if(e.key==='Enter') handleAuthSubmit(); });
+  document.getElementById('authFormEl').addEventListener('submit', (e)=>{
+    e.preventDefault();
+    handleAuthSubmit();
+  });
   document.getElementById('authEyeBtn').addEventListener('click', ()=>{
     const pwInput = document.getElementById('authPassword');
     const eyeBtn = document.getElementById('authEyeBtn');
@@ -2045,26 +2040,6 @@ async function handleAuthSubmit(){
   btn.disabled = false;
 }
 
-async function handlePasskeySignin(){
-  showAuthError('');
-  if(!supabaseConfigured){
-    showAuthError("This app isn't connected to an account backend yet. See the setup instructions.");
-    return;
-  }
-  try{
-    // Passkey support in Supabase is in Beta at the time this was
-    // written, so the exact method name may have moved on - check
-    // Supabase's current passkey docs if this throws unexpectedly.
-    const { data, error } = await supabaseClient.auth.signInWithPasskey();
-    if(error) throw error;
-    await enterApp(data.user);
-  }catch(e){
-    showAuthError("Passkey sign-in didn't work (not set up yet, or not supported in this browser). Use your name and password instead.");
-  }
-}
-
-document.getElementById('passkeySigninBtn').addEventListener('click', handlePasskeySignin);
-
 document.getElementById('tutorialLink').addEventListener('click', (e)=>{
   e.preventDefault();
   enterTutorial();
@@ -2115,21 +2090,6 @@ document.getElementById('exitTutorialBtn').addEventListener('click', ()=>{
 /* ============================================================
    ACCOUNT ACTIONS (called from the Settings panel)
    ============================================================ */
-async function addPasskeyToAccount(){
-  try{
-    // Beta Supabase feature - correct method is registerPasskey().
-    // Also requires Authentication -> Passkeys to be turned on in the
-    // Supabase dashboard, with this site's exact origin listed under
-    // "Relying Party Origins" - without that, this will fail even
-    // though nothing is wrong with the app itself.
-    const { error } = await supabaseClient.auth.registerPasskey();
-    if(error) throw error;
-    alert('Passkey added. You can now use "Sign in with a passkey" on this device.');
-  }catch(e){
-    alert("Couldn't add a passkey. Either this browser doesn't support passkeys, or Passkeys haven't been turned on yet in your Supabase project's Authentication settings.");
-  }
-}
-
 function signOutOfAccount(){
   if(!authUser || !supabaseClient) return;
   supabaseClient.auth.signOut().then(()=>{
@@ -2155,14 +2115,13 @@ async function boot(){
     return;
   }
 
-  // Using only onAuthStateChange (rather than also calling getSession()
-  // separately) avoids a race where a data request could fire before
-  // the client has fully attached the restored session to it - which
-  // was causing covers to silently come back empty on auto-login.
+  // Deliberately not auto-entering the app from a restored session -
+  // that path had a timing issue where covers loaded before the
+  // client had fully synced the session, silently showing no images.
+  // Always showing the login screen and only entering on an explicit
+  // form submit sidesteps that entirely, since that path is proven
+  // to load correctly.
   supabaseClient.auth.onAuthStateChange((event, session)=>{
-    if((event === 'INITIAL_SESSION' || event === 'SIGNED_IN') && session && session.user && !authUser){
-      enterApp(session.user);
-    }
     if(event === 'SIGNED_OUT'){
       showAuthGateUI();
     }
