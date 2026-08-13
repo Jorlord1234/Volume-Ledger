@@ -1250,43 +1250,95 @@ async function preloadCoversFromSupabase(){
   }catch(e){ /* covers just won't show until next successful load */ }
 }
 
+/* ============================================================
+   OFFLINE RETRY QUEUE
+   If a save fails (most likely because you're offline), it isn't
+   just dropped - it's marked pending and retried automatically the
+   moment the browser reports being back online, and also on a
+   periodic timer as a backup (the 'online' event isn't always
+   reliable on every device).
+   ============================================================ */
+let entriesDirty = false;
+let pendingCovers = new Map();   // seriesId -> dataUri, awaiting upload
+let pendingCoverDeletes = new Set(); // seriesId awaiting delete
+
+function updateSyncStatus(){
+  const pendingCount = pendingCovers.size + pendingCoverDeletes.size + (entriesDirty ? 1 : 0);
+  if(pendingCount > 0){
+    showSyncNotice("Working offline — changes will save automatically once you're back online.");
+  } else {
+    hideSyncNotice();
+  }
+}
+
 async function saveEntries(){
-  if(isTutorial) return; // never persist tutorial changes
+  if(isTutorial) return;
   if(!authUser || !supabaseClient) return;
   try{
-    await supabaseClient.from('collections').upsert({
+    const { error } = await supabaseClient.from('collections').upsert({
       user_id: authUser.id,
       entries: entries,
       updated_at: new Date().toISOString()
     });
+    if(error) throw error;
+    entriesDirty = false;
   }catch(e){
-    showSyncNotice("A change couldn't be saved to your account (offline or a connection problem). Try again once you're back online.");
+    entriesDirty = true;
   }
+  updateSyncStatus();
 }
 
 async function saveCoverRemote(seriesId, dataUri){
   if(isTutorial) return;
   if(!authUser || !supabaseClient) return;
   try{
-    await supabaseClient.from('covers').upsert({
+    const { error } = await supabaseClient.from('covers').upsert({
       user_id: authUser.id,
       series_id: seriesId,
       data: dataUri,
       updated_at: new Date().toISOString()
     });
+    if(error) throw error;
+    pendingCovers.delete(seriesId);
   }catch(e){
-    showSyncNotice("That cover image couldn't be saved to your account just now.");
+    pendingCovers.set(seriesId, dataUri);
   }
+  updateSyncStatus();
 }
 
 async function deleteCoverRemote(seriesId){
   if(isTutorial) return;
   if(!authUser || !supabaseClient) return;
+  pendingCovers.delete(seriesId); // an upload for this cover is no longer relevant
   try{
-    await supabaseClient.from('covers').delete()
+    const { error } = await supabaseClient.from('covers').delete()
       .eq('user_id', authUser.id)
       .eq('series_id', seriesId);
-  }catch(e){ /* not critical if this silently fails */ }
+    if(error) throw error;
+    pendingCoverDeletes.delete(seriesId);
+  }catch(e){
+    pendingCoverDeletes.add(seriesId);
+  }
+  updateSyncStatus();
+}
+
+async function flushPendingWrites(){
+  if(!authUser || !supabaseClient) return;
+  if(entriesDirty) await saveEntries();
+  for(const [seriesId, dataUri] of Array.from(pendingCovers.entries())){
+    await saveCoverRemote(seriesId, dataUri);
+  }
+  for(const seriesId of Array.from(pendingCoverDeletes)){
+    await deleteCoverRemote(seriesId);
+  }
+}
+
+window.addEventListener('online', flushPendingWrites);
+setInterval(flushPendingWrites, 20000); // backup in case the 'online' event doesn't fire
+
+function hideSyncNotice(){
+  const el = document.getElementById('storageNotice');
+  if(el.dataset.kind === 'sync') el.style.display = 'none';
 }
 
 function showSyncNotice(message){
@@ -1297,6 +1349,7 @@ function showSyncNotice(message){
   `;
   el.style.display = 'flex';
   el.className = 'storage-notice';
+  el.dataset.kind = 'sync';
   document.getElementById('dismissNotice').addEventListener('click', ()=>{ el.style.display = 'none'; });
 }
 
@@ -1892,10 +1945,50 @@ function renderSettings(){
     <p class="settings-note">This only changes colors on this device. If you share this app's link with anyone, their color choice is separate from yours.</p>
 
     <div class="settings-section-label">Account</div>
-    <div class="edit-actions" style="justify-content:flex-start;flex-wrap:wrap;">
+    <div class="auth-field">
+      <input type="email" id="settingsNewEmail" placeholder="New email address">
+    </div>
+    <button class="btn btn-ghost" id="settingsUpdateEmailBtn" style="width:100%;margin-bottom:12px;">Update email</button>
+    <div class="auth-field auth-password-field">
+      <input type="password" id="settingsNewPassword" placeholder="New password">
+      <button type="button" class="auth-eye-btn" id="settingsPwEyeBtn" aria-label="Show password">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+    <button class="btn btn-ghost" id="settingsUpdatePasswordBtn" style="width:100%;margin-bottom:6px;">Change password</button>
+    <div id="settingsAccountMsg" style="font-size:12px;color:var(--muted);min-height:16px;"></div>
+    <div class="edit-actions" style="justify-content:flex-start;flex-wrap:wrap;margin-top:10px;">
       <button class="btn btn-ghost" id="settingsSignOutBtn">Sign out</button>
     </div>
   `;
+  function showAccountMsg(msg){ document.getElementById('settingsAccountMsg').textContent = msg; }
+  document.getElementById('settingsPwEyeBtn').addEventListener('click', ()=>{
+    const pwInput = document.getElementById('settingsNewPassword');
+    pwInput.type = pwInput.type === 'text' ? 'password' : 'text';
+  });
+  document.getElementById('settingsUpdateEmailBtn').addEventListener('click', async ()=>{
+    const newEmail = document.getElementById('settingsNewEmail').value.trim();
+    if(!newEmail){ showAccountMsg('Enter a new email address.'); return; }
+    try{
+      const { error } = await supabaseClient.auth.updateUser({ email: newEmail });
+      if(error) throw error;
+      showAccountMsg('Check your new email for a confirmation link to finish this change.');
+    }catch(e){
+      showAccountMsg(e.message || "Couldn't update email.");
+    }
+  });
+  document.getElementById('settingsUpdatePasswordBtn').addEventListener('click', async ()=>{
+    const newPw = document.getElementById('settingsNewPassword').value;
+    if(!newPw){ showAccountMsg('Enter a new password.'); return; }
+    try{
+      const { error } = await supabaseClient.auth.updateUser({ password: newPw });
+      if(error) throw error;
+      showAccountMsg('Password updated.');
+      document.getElementById('settingsNewPassword').value = '';
+    }catch(e){
+      showAccountMsg(e.message || "Couldn't update password.");
+    }
+  });
   document.getElementById('settingsSignOutBtn').addEventListener('click', ()=>{
     closeSettings();
     signOutOfAccount();
@@ -1935,23 +2028,12 @@ document.getElementById('settingsOverlay').addEventListener('click', (e)=>{
 
 /* ============================================================
    AUTH
-   The app asks for a Name + Password, not an email - but Supabase
-   Auth's password sign-in is built around email addresses. So we
-   turn the name into a stable, fake-looking internal email behind
-   the scenes (e.g. "Joriam Deurloo" -> "joriam.deurloo@volumeledger.app").
-   This is invisible to the person using the app.
-
-   One honest limitation: since two different names could produce
-   the same slug (e.g. spacing/capitalization differences), names
-   effectively need to be unique per person the same way a username
-   would. That's a fair trade for "just a name and password," but
-   worth knowing.
+   Uses a real email address, which is what makes "forgot password"
+   actually possible - Supabase can only send a reset link to a real
+   inbox. No email is ever sent automatically; the only email this
+   app triggers is the reset link, and only when someone explicitly
+   clicks "Forgot password?".
    ============================================================ */
-function nameToInternalEmail(name){
-  const slug = name.trim().toLowerCase().replace(/\s+/g, '.').replace(/[^a-z0-9.]/g, '');
-  return slug + '@volumeledger.app';
-}
-
 function showAuthError(message){
   const el = document.getElementById('authError');
   el.textContent = message;
@@ -1965,7 +2047,7 @@ function renderAuthForm(){
   area.innerHTML = `
     <form id="authFormEl" autocomplete="on">
       <div class="auth-field">
-        <input type="text" id="authName" name="username" placeholder="Name" autocomplete="username">
+        <input type="email" id="authEmail" name="email" placeholder="Email" autocomplete="email">
       </div>
       <div class="auth-field auth-password-field">
         <input type="password" id="authPassword" name="password" placeholder="Password" autocomplete="${authMode==='signup'?'new-password':'current-password'}">
@@ -1977,6 +2059,7 @@ function renderAuthForm(){
         ${authMode==='signup' ? 'Create account' : 'Log in'}
       </button>
     </form>
+    ${authMode==='signin' ? '<a href="#" class="auth-tutorial-link" id="forgotPasswordLink" style="margin-top:10px;">Forgot password?</a>' : ''}
   `;
   document.getElementById('authFormEl').addEventListener('submit', (e)=>{
     e.preventDefault();
@@ -1989,6 +2072,11 @@ function renderAuthForm(){
     pwInput.type = showing ? 'password' : 'text';
     eyeBtn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
     eyeBtn.classList.toggle('active', !showing);
+  });
+  const forgotLink = document.getElementById('forgotPasswordLink');
+  if(forgotLink) forgotLink.addEventListener('click', (e)=>{
+    e.preventDefault();
+    handleForgotPassword();
   });
   const switchLine = document.getElementById('authSwitchLine');
   if(switchLine){
@@ -2011,13 +2099,12 @@ async function handleAuthSubmit(){
     showAuthError("This app isn't connected to an account backend yet. See the setup instructions.");
     return;
   }
-  const name = document.getElementById('authName').value.trim();
+  const email = document.getElementById('authEmail').value.trim();
   const password = document.getElementById('authPassword').value;
-  if(!name || !password){
-    showAuthError('Enter a name and password.');
+  if(!email || !password){
+    showAuthError('Enter an email and password.');
     return;
   }
-  const email = nameToInternalEmail(name);
   const btn = document.getElementById('authSubmitBtn');
   btn.disabled = true;
   try{
@@ -2035,9 +2122,59 @@ async function handleAuthSubmit(){
       await enterApp(data.user);
     }
   }catch(e){
-    showAuthError(e.message || 'Something went wrong. Check your name and password and try again.');
+    showAuthError(e.message || 'Something went wrong. Check your email and password and try again.');
   }
   btn.disabled = false;
+}
+
+async function handleForgotPassword(){
+  showAuthError('');
+  const email = document.getElementById('authEmail').value.trim();
+  if(!email){
+    showAuthError('Enter your email above first, then tap "Forgot password?" again.');
+    return;
+  }
+  try{
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.href.split('#')[0]
+    });
+    if(error) throw error;
+    showAuthError("If that email has an account, a reset link was just sent to it. Open it on this device to set a new password.");
+  }catch(e){
+    showAuthError(e.message || "Couldn't send a reset email right now.");
+  }
+}
+
+/* Handles the link from the reset email: Supabase logs the person in
+   with a temporary "recovery" session and fires this event when they
+   land back on the app, so we can show a plain "set a new password"
+   form instead of the normal app. */
+function showPasswordRecoveryForm(){
+  const el = document.getElementById('authGate');
+  el.style.display = 'flex';
+  document.getElementById('mainApp').style.display = 'none';
+  document.getElementById('authFormArea').innerHTML = `
+    <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">Enter a new password for your account.</p>
+    <div class="auth-field auth-password-field">
+      <input type="password" id="newPasswordInput" placeholder="New password">
+    </div>
+    <button class="btn btn-primary" id="setNewPasswordBtn" style="width:100%;">Set new password</button>
+  `;
+  const switchLine = document.getElementById('authSwitchLine');
+  if(switchLine) switchLine.style.display = 'none';
+  document.getElementById('setNewPasswordBtn').addEventListener('click', async ()=>{
+    const newPassword = document.getElementById('newPasswordInput').value;
+    if(!newPassword){ showAuthError('Enter a new password.'); return; }
+    try{
+      const { error } = await supabaseClient.auth.updateUser({ password: newPassword });
+      if(error) throw error;
+      showAuthError('Password updated. You can log in with it now.');
+      authMode = 'signin';
+      renderAuthForm();
+    }catch(e){
+      showAuthError(e.message || "Couldn't update the password.");
+    }
+  });
 }
 
 document.getElementById('tutorialLink').addEventListener('click', (e)=>{
@@ -2122,6 +2259,9 @@ async function boot(){
   // form submit sidesteps that entirely, since that path is proven
   // to load correctly.
   supabaseClient.auth.onAuthStateChange((event, session)=>{
+    if(event === 'PASSWORD_RECOVERY'){
+      showPasswordRecoveryForm();
+    }
     if(event === 'SIGNED_OUT'){
       showAuthGateUI();
     }
