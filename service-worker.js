@@ -23,7 +23,7 @@
     close and reopen the app.
 */
 
-const CACHE_NAME = 'volume-ledger-v10';
+const CACHE_NAME = 'volume-ledger-v11';
 const APP_SHELL = [
   './index.html',
   './manifest.json',

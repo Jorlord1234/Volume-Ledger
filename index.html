@@ -1970,7 +1970,11 @@ function renderSettings(){
     const newEmail = document.getElementById('settingsNewEmail').value.trim();
     if(!newEmail){ showAccountMsg('Enter a new email address.'); return; }
     try{
-      const { error } = await supabaseClient.auth.updateUser({ email: newEmail });
+      const redirectTo = window.location.href.split('#')[0].split('?')[0];
+      const { error } = await supabaseClient.auth.updateUser(
+        { email: newEmail },
+        { emailRedirectTo: redirectTo }
+      );
       if(error) throw error;
       showAccountMsg('Check your new email for a confirmation link to finish this change.');
     }catch(e){
@@ -2136,7 +2140,7 @@ async function handleForgotPassword(){
   }
   try{
     const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
-      redirectTo: window.location.href.split('#')[0]
+      redirectTo: window.location.href.split('#')[0].split('?')[0]
     });
     if(error) throw error;
     showAuthError("If that email has an account, a reset link was just sent to it. Open it on this device to set a new password.");
