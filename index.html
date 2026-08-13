@@ -2155,14 +2155,14 @@ async function boot(){
     return;
   }
 
-  try{
-    const { data } = await supabaseClient.auth.getSession();
-    if(data && data.session && data.session.user){
-      await enterApp(data.session.user);
-    }
-  }catch(e){ /* just show the sign-in form */ }
-
+  // Using only onAuthStateChange (rather than also calling getSession()
+  // separately) avoids a race where a data request could fire before
+  // the client has fully attached the restored session to it - which
+  // was causing covers to silently come back empty on auto-login.
   supabaseClient.auth.onAuthStateChange((event, session)=>{
+    if((event === 'INITIAL_SESSION' || event === 'SIGNED_IN') && session && session.user && !authUser){
+      enterApp(session.user);
+    }
     if(event === 'SIGNED_OUT'){
       showAuthGateUI();
     }
