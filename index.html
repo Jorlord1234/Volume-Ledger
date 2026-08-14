@@ -1241,6 +1241,12 @@ async function preloadCoversFromSupabase(){
   const targets = entries.filter(e=>e.hasCover && !coverCache[e.id]);
   if(targets.length===0) return;
   try{
+    // Force the client to fully settle its auth state before this
+    // query fires. On a freshly-restored session (auto-login), the
+    // internal auth token can lag slightly behind the "SIGNED_IN"
+    // event itself - awaiting getSession() here guarantees the
+    // request that follows is properly authenticated.
+    await supabaseClient.auth.getSession();
     const { data, error } = await supabaseClient
       .from('covers')
       .select('series_id, data')
@@ -2032,8 +2038,12 @@ function renderAuthForm(){
   area.innerHTML = `
     <form id="authFormEl" autocomplete="on">
       <div class="auth-field">
-        <input type="email" id="authEmail" name="email" placeholder="Email" autocomplete="email">
+        <input type="text" id="authName" name="username" placeholder="Name" autocomplete="username">
       </div>
+      ${authMode==='signup' ? `
+      <div class="auth-field">
+        <input type="email" id="authEmail" name="email" placeholder="Email" autocomplete="email">
+      </div>` : ''}
       <div class="auth-field auth-password-field">
         <input type="password" id="authPassword" name="password" placeholder="Password" autocomplete="${authMode==='signup'?'new-password':'current-password'}">
         <button type="button" class="auth-eye-btn" id="authEyeBtn" aria-label="Show password">
@@ -2078,53 +2088,92 @@ function renderAuthForm(){
   }
 }
 
+// Looks up the email that belongs to a name, using the public
+// profiles table - this is what lets logging in only need a name.
+async function lookupEmailForName(name){
+  const { data, error } = await supabaseClient
+    .from('profiles')
+    .select('email')
+    .ilike('name', name.trim())
+    .maybeSingle();
+  if(error) throw error;
+  return data ? data.email : null;
+}
+
 async function handleAuthSubmit(){
   showAuthError('');
   if(!supabaseConfigured){
     showAuthError("This app isn't connected to an account backend yet. See the setup instructions.");
     return;
   }
-  const email = document.getElementById('authEmail').value.trim();
+  const name = document.getElementById('authName').value.trim();
   const password = document.getElementById('authPassword').value;
-  if(!email || !password){
-    showAuthError('Enter an email and password.');
+  if(!name || !password){
+    showAuthError('Enter a name and password.');
     return;
   }
   const btn = document.getElementById('authSubmitBtn');
   btn.disabled = true;
   try{
     if(authMode === 'signup'){
+      const email = document.getElementById('authEmail').value.trim();
+      if(!email){
+        showAuthError('Enter an email too - it\'s only used if you ever need to reset your password.');
+        btn.disabled = false;
+        return;
+      }
       const { data, error } = await supabaseClient.auth.signUp({ email, password });
       if(error) throw error;
       if(data.session){
+        const { error: profileError } = await supabaseClient.from('profiles').insert({
+          user_id: data.user.id, name, email
+        });
+        if(profileError){
+          showAuthError(profileError.message.includes('duplicate') || profileError.message.includes('unique')
+            ? 'That name is already taken - try another.'
+            : (profileError.message || "Account created, but couldn't save your name."));
+          btn.disabled = false;
+          return;
+        }
         await enterApp(data.user);
       } else if(data.user){
         showAuthError("Account created. If your Supabase project still has email confirmation turned on, turn it off in Authentication settings, then log in.");
       }
     } else {
+      const email = await lookupEmailForName(name);
+      if(!email){
+        showAuthError('No account found with that name.');
+        btn.disabled = false;
+        return;
+      }
       const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
       if(error) throw error;
       await enterApp(data.user);
     }
   }catch(e){
-    showAuthError(e.message || 'Something went wrong. Check your email and password and try again.');
+    showAuthError(e.message || 'Something went wrong. Check your name and password and try again.');
   }
   btn.disabled = false;
 }
 
 async function handleForgotPassword(){
   showAuthError('');
-  const email = document.getElementById('authEmail').value.trim();
-  if(!email){
-    showAuthError('Enter your email above first, then tap "Forgot password?" again.');
+  const name = document.getElementById('authName').value.trim();
+  if(!name){
+    showAuthError('Enter your name above first, then tap "Forgot password?" again.');
     return;
   }
   try{
+    const email = await lookupEmailForName(name);
+    if(!email){
+      showAuthError('No account found with that name.');
+      return;
+    }
     const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
       redirectTo: window.location.href.split('#')[0].split('?')[0]
     });
     if(error) throw error;
-    showAuthError("If that email has an account, a reset link was just sent to it. Open it on this device to set a new password.");
+    showAuthError("A reset link was just sent to the email on that account. Open it on this device to set a new password.");
   }catch(e){
     showAuthError(e.message || "Couldn't send a reset email right now.");
   }
@@ -2237,13 +2286,14 @@ async function boot(){
     return;
   }
 
-  // Deliberately not auto-entering the app from a restored session -
-  // that path had a timing issue where covers loaded before the
-  // client had fully synced the session, silently showing no images.
-  // Always showing the login screen and only entering on an explicit
-  // form submit sidesteps that entirely, since that path is proven
-  // to load correctly.
+  // Auto-enters the app from a restored session (Supabase keeps you
+  // signed in for months by default) - the earlier timing bug that
+  // caused this to silently show no covers is now fixed directly in
+  // preloadCoversFromSupabase() instead of working around it here.
   supabaseClient.auth.onAuthStateChange((event, session)=>{
+    if((event === 'INITIAL_SESSION' || event === 'SIGNED_IN') && session && session.user && !authUser){
+      enterApp(session.user);
+    }
     if(event === 'PASSWORD_RECOVERY'){
       showPasswordRecoveryForm();
     }
