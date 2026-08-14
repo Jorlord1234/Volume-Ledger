@@ -252,6 +252,19 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   position:absolute;bottom:0;left:0;height:3px;z-index:1;
   background:var(--gold);
 }
+.tile-fullseries{
+  position:absolute;top:8px;right:8px;z-index:1;
+  background:var(--green);
+  color:#fff;
+  font-size:9px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:0.4px;
+  padding:3px 7px;
+  border-radius:20px;
+  border:1px solid rgba(255,255,255,0.2);
+  box-shadow:0 2px 6px rgba(0,0,0,0.5);
+}
 
 /* LIST VIEW */
 .list{
@@ -264,8 +277,8 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .list-row{
   display:flex;
-  align-items:center;
-  gap:12px;
+  flex-direction:column;
+  gap:6px;
   padding:9px 12px;
   border-bottom:1px solid var(--border);
   cursor:pointer;
@@ -273,6 +286,22 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .list-row:last-child{border-bottom:none;}
 .list-row:hover{background:var(--surface-alt);}
+.list-row-top{display:flex;align-items:center;gap:12px;}
+.list-spines{
+  display:flex;
+  flex-wrap:wrap;
+  gap:1px;
+  padding-left:48px;
+}
+.list-spine-tick{
+  width:3px;
+  height:12px;
+  border-radius:1px;
+  background:var(--tick-empty);
+  flex-shrink:0;
+}
+.list-spine-tick.owned{background:var(--gold);}
+.list-spine-tick.ordered{background:var(--blue);}
 .list-cover{
   width:36px;height:50px;
   border-radius:4px;
@@ -301,7 +330,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 .list-status-pill{flex-shrink:0;}
 
 @media (max-width:560px){
-  .list-row{flex-wrap:wrap;}
+  .list-row-top{flex-wrap:wrap;}
   .list-stats{flex-basis:100%;padding-left:48px;}
 }
 
@@ -842,7 +871,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   <div class="controls">
     <div class="search-wrap">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="text" id="search" placeholder="Search by name...">
+      <input type="text" id="search" placeholder="Search by name..." autocomplete="off" name="series-search">
     </div>
     <select id="sort">
       <option value="name">Sort: Name (A–Z)</option>
@@ -1159,6 +1188,10 @@ function countOwned(e){ return e.volumes.filter(v=>v==='owned').length; }
 function countOrdered(e){ return e.volumes.filter(v=>v==='ordered').length; }
 function countSecured(e){ return e.volumes.filter(v=>v!=='missing').length; }
 function isComplete(e){ return e.status==='completed' && e.total>0 && countSecured(e)>=e.total; }
+// True when every volume you're tracking for this series is actually
+// owned (nothing ordered/pending) - meaningful mainly for ongoing
+// series, which otherwise have no "you're caught up" indicator at all.
+function isFullySecured(e){ return e.volumes.length>0 && e.volumes.every(v=>v==='owned'); }
 
 function hashHue(str){
   let h=0;
@@ -1400,6 +1433,7 @@ function countsText(e){
 function tileHTML(e){
   const secured = countSecured(e);
   const complete = isComplete(e);
+  const fullySecured = !complete && e.status==='ongoing' && isFullySecured(e);
   const pct = (e.status==='completed' && e.total>0) ? Math.round((secured/e.total)*100) : null;
   const cover = coverCache[e.id];
   const bgStyle = cover
@@ -1408,9 +1442,16 @@ function tileHTML(e){
   return `
   <div class="tile" style="${bgStyle}" data-id="${e.id}">
     ${complete ? '<span class="tile-seal">完</span>' : ''}
+    ${fullySecured ? '<span class="tile-fullseries">Full Series</span>' : ''}
     ${pct!==null ? `<span class="tile-progress" style="width:${pct}%;"></span>` : ''}
     <div class="tile-title">${escapeHTML(e.name)}</div>
   </div>`;
+}
+
+function listSpinesHTML(e){
+  return e.volumes.map(status =>
+    `<span class="list-spine-tick ${status!=='missing'?status:''}"></span>`
+  ).join('');
 }
 
 function listRowHTML(e){
@@ -1420,10 +1461,13 @@ function listRowHTML(e){
     : `background:linear-gradient(160deg, hsl(${hashHue(e.name)},32%,20%), hsl(${hashHue(e.name)},28%,11%));`;
   return `
   <div class="list-row" data-id="${e.id}">
-    <div class="list-cover" style="${bgStyle}"></div>
-    <div class="list-name">${escapeHTML(e.name)}</div>
-    <span class="list-stats">${countsText(e)}</span>
-    <span class="cat-pill list-status-pill status-${e.status}">${e.status==='completed'?'Completed':'Ongoing'}</span>
+    <div class="list-row-top">
+      <div class="list-cover" style="${bgStyle}"></div>
+      <div class="list-name">${escapeHTML(e.name)}</div>
+      <span class="list-stats">${countsText(e)}</span>
+      <span class="cat-pill list-status-pill status-${e.status}">${e.status==='completed'?'Completed':'Ongoing'}</span>
+    </div>
+    ${e.volumes.length ? `<div class="list-spines">${listSpinesHTML(e)}</div>` : ''}
   </div>`;
 }
 
@@ -1621,11 +1665,14 @@ function detailHTML(e){
       </div>`;
   }
 
+  const fullySecured = !complete && e.status==='ongoing' && isFullySecured(e);
+
   return `
     <div class="card-top">
       <div class="name-block">
         <span class="name">${escapeHTML(e.name)}</span>
         <span class="cat-pill status-${e.status}">${e.status==='completed'?'Completed':'Ongoing'}</span>
+        ${fullySecured ? '<span class="cat-pill" style="border-color:var(--green);color:var(--green);">Full Series</span>' : ''}
         ${complete ? '<span class="seal" title="Complete">完</span>' : ''}
       </div>
       <span class="count">${countsText(e)}</span>
@@ -1681,9 +1728,13 @@ function renderModal(){
     sp.addEventListener('mouseleave', hideTooltip);
   });
 
+  let addVolumeBusy = false;
   async function addNextVolume(){
+    if(addVolumeBusy) return;
+    addVolumeBusy = true;
     entry.volumes.push('owned');
     await saveEntries();
+    addVolumeBusy = false;
     renderModal();
     renderCollection();
   }
@@ -1697,7 +1748,8 @@ function renderModal(){
 
   const delBtn = modal.querySelector('.del-btn');
   if(delBtn) delBtn.addEventListener('click', async ()=>{
-    if(confirm(`Remove "${entry.name}" from your ledger?`)){
+    const ok = await showConfirmDialog(`Remove "${entry.name}" from your ledger?`, 'Remove');
+    if(ok){
       entries = entries.filter(x=>x.id!==entry.id);
       delete coverCache[entry.id];
       await deleteCoverRemote(entry.id);
@@ -1994,13 +2046,11 @@ function renderSettings(){
   });
   const goldInput = document.getElementById('customGold');
   const redInput = document.getElementById('customRed');
-  goldInput.addEventListener('input', async ()=>{
-    await saveTheme({gold: goldInput.value, red: currentTheme.red});
-    renderSettings();
+  goldInput.addEventListener('input', ()=>{
+    saveTheme({gold: goldInput.value, red: currentTheme.red});
   });
-  redInput.addEventListener('input', async ()=>{
-    await saveTheme({gold: currentTheme.gold, red: redInput.value});
-    renderSettings();
+  redInput.addEventListener('input', ()=>{
+    saveTheme({gold: currentTheme.gold, red: redInput.value});
   });
 }
 
@@ -2008,6 +2058,33 @@ function openSettings(){
   renderSettings();
   document.getElementById('settingsOverlay').classList.add('open');
 }
+/* A styled replacement for the browser's native confirm() popup,
+   matching the rest of the app instead of looking like a system
+   alert. Returns a Promise<boolean>, same shape as confirm(). */
+function showConfirmDialog(message, confirmLabel){
+  return new Promise((resolve)=>{
+    const overlay = document.createElement('div');
+    overlay.className = 'overlay open';
+    overlay.innerHTML = `
+      <div class="modal" style="max-width:380px;">
+        <p style="font-size:14px;line-height:1.6;margin:0 0 18px;">${escapeHTML(message)}</p>
+        <div class="edit-actions">
+          <button class="btn btn-ghost" id="confirmDialogCancel">Cancel</button>
+          <button class="btn btn-primary" id="confirmDialogOk">${escapeHTML(confirmLabel || 'Confirm')}</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    function finish(result){
+      overlay.remove();
+      resolve(result);
+    }
+    overlay.addEventListener('click', (e)=>{ if(e.target===overlay) finish(false); });
+    document.getElementById('confirmDialogCancel').addEventListener('click', ()=> finish(false));
+    document.getElementById('confirmDialogOk').addEventListener('click', ()=> finish(true));
+  });
+}
+
 function closeSettings(){
   document.getElementById('settingsOverlay').classList.remove('open');
 }
@@ -2262,12 +2339,21 @@ document.getElementById('exitTutorialBtn').addEventListener('click', ()=>{
    ACCOUNT ACTIONS (called from the Settings panel)
    ============================================================ */
 function signOutOfAccount(){
-  if(!authUser || !supabaseClient) return;
-  supabaseClient.auth.signOut().then(()=>{
+  if(isTutorial){
+    isTutorial = false;
     entries = [];
     coverCache = {};
     showAuthGateUI();
-  });
+    return;
+  }
+  if(!authUser || !supabaseClient) return;
+  supabaseClient.auth.signOut()
+    .catch(()=>{ /* still reset the UI below even if the network call failed */ })
+    .finally(()=>{
+      entries = [];
+      coverCache = {};
+      showAuthGateUI();
+    });
 }
 
 /* ============================================================
