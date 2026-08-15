@@ -184,6 +184,8 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 .btn-primary:hover{opacity:0.88;}
 .btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text);}
 .btn-ghost:hover{border-color:var(--gold);color:var(--gold);}
+.btn-danger{background:transparent;border:1px solid var(--red);color:var(--red);}
+.btn-danger:hover{background:var(--red);color:#fff;}
 
 .view-toggle{
   display:flex;
@@ -251,19 +253,6 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 .tile-progress{
   position:absolute;bottom:0;left:0;height:3px;z-index:1;
   background:var(--gold);
-}
-.tile-fullseries{
-  position:absolute;top:8px;right:8px;z-index:1;
-  background:var(--green);
-  color:#fff;
-  font-size:9px;
-  font-weight:700;
-  text-transform:uppercase;
-  letter-spacing:0.4px;
-  padding:3px 7px;
-  border-radius:20px;
-  border:1px solid rgba(255,255,255,0.2);
-  box-shadow:0 2px 6px rgba(0,0,0,0.5);
 }
 
 /* LIST VIEW */
@@ -1188,10 +1177,6 @@ function countOwned(e){ return e.volumes.filter(v=>v==='owned').length; }
 function countOrdered(e){ return e.volumes.filter(v=>v==='ordered').length; }
 function countSecured(e){ return e.volumes.filter(v=>v!=='missing').length; }
 function isComplete(e){ return e.status==='completed' && e.total>0 && countSecured(e)>=e.total; }
-// True when every volume you're tracking for this series is actually
-// owned (nothing ordered/pending) - meaningful mainly for ongoing
-// series, which otherwise have no "you're caught up" indicator at all.
-function isFullySecured(e){ return e.volumes.length>0 && e.volumes.every(v=>v==='owned'); }
 
 function hashHue(str){
   let h=0;
@@ -1433,7 +1418,6 @@ function countsText(e){
 function tileHTML(e){
   const secured = countSecured(e);
   const complete = isComplete(e);
-  const fullySecured = !complete && e.status==='ongoing' && isFullySecured(e);
   const pct = (e.status==='completed' && e.total>0) ? Math.round((secured/e.total)*100) : null;
   const cover = coverCache[e.id];
   const bgStyle = cover
@@ -1441,8 +1425,7 @@ function tileHTML(e){
     : `background:linear-gradient(160deg, hsl(${hashHue(e.name)},32%,20%), hsl(${hashHue(e.name)},28%,11%));`;
   return `
   <div class="tile" style="${bgStyle}" data-id="${e.id}">
-    ${complete ? '<span class="tile-seal">完</span>' : ''}
-    ${fullySecured ? '<span class="tile-fullseries">Full Series</span>' : ''}
+    ${complete ? '<span class="tile-seal">✓</span>' : ''}
     ${pct!==null ? `<span class="tile-progress" style="width:${pct}%;"></span>` : ''}
     <div class="tile-title">${escapeHTML(e.name)}</div>
   </div>`;
@@ -1665,15 +1648,12 @@ function detailHTML(e){
       </div>`;
   }
 
-  const fullySecured = !complete && e.status==='ongoing' && isFullySecured(e);
-
   return `
     <div class="card-top">
       <div class="name-block">
         <span class="name">${escapeHTML(e.name)}</span>
         <span class="cat-pill status-${e.status}">${e.status==='completed'?'Completed':'Ongoing'}</span>
-        ${fullySecured ? '<span class="cat-pill" style="border-color:var(--green);color:var(--green);">Full Series</span>' : ''}
-        ${complete ? '<span class="seal" title="Complete">完</span>' : ''}
+        ${complete ? '<span class="seal" title="Complete">✓</span>' : ''}
       </div>
       <span class="count">${countsText(e)}</span>
     </div>
@@ -2002,6 +1982,10 @@ function renderSettings(){
     </div>
     <p class="settings-note">This only changes colors on this device. If you share this app's link with anyone, their color choice is separate from yours.</p>
 
+    <div class="settings-section-label">Starter collection (temporary)</div>
+    <p class="settings-note" style="margin-top:0;">Adds the built-in 18-series example collection to whatever's already in this account. Safe to use more than once - it never replaces or removes anything, only adds.</p>
+    <button class="btn btn-ghost" id="settingsImportStarterBtn" style="width:100%;margin-bottom:14px;">Import starter collection</button>
+
     <div class="settings-section-label">Account</div>
     <div class="auth-field auth-password-field">
       <input type="password" id="settingsNewPassword" placeholder="New password">
@@ -2013,6 +1997,7 @@ function renderSettings(){
     <div id="settingsAccountMsg" style="font-size:12px;color:var(--muted);min-height:16px;"></div>
     <div class="edit-actions" style="justify-content:flex-start;flex-wrap:wrap;margin-top:10px;">
       <button class="btn btn-ghost" id="settingsSignOutBtn">Sign out</button>
+      <button class="btn btn-danger" id="settingsDeleteAccountBtn">Delete account</button>
     </div>
   `;
   function showAccountMsg(msg){ document.getElementById('settingsAccountMsg').textContent = msg; }
@@ -2036,6 +2021,8 @@ function renderSettings(){
     closeSettings();
     signOutOfAccount();
   });
+  document.getElementById('settingsImportStarterBtn').addEventListener('click', importStarterCollection);
+  document.getElementById('settingsDeleteAccountBtn').addEventListener('click', deleteMyAccount);
   document.getElementById('settingsCloseBtn').addEventListener('click', closeSettings);
   modal.querySelectorAll('.theme-swatch').forEach(sw=>{
     sw.addEventListener('click', async ()=>{
@@ -2338,6 +2325,56 @@ document.getElementById('exitTutorialBtn').addEventListener('click', ()=>{
 /* ============================================================
    ACCOUNT ACTIONS (called from the Settings panel)
    ============================================================ */
+async function importStarterCollection(){
+  const ok = await showConfirmDialog('Add the built-in starter collection (18 example series) to your current collection?', 'Import');
+  if(!ok) return;
+  const additions = seedData.map(original => {
+    const copy = JSON.parse(JSON.stringify(original));
+    const newId = uid();
+    copy.id = newId;
+    return { originalId: original.id, entry: copy };
+  });
+  entries = entries.concat(additions.map(a => a.entry));
+  await saveEntries();
+  for(const { originalId, entry } of additions){
+    if(entry.hasCover && BUNDLED_COVERS_MAP[originalId]){
+      const dataUri = BUNDLED_COVERS_MAP[originalId];
+      coverCache[entry.id] = dataUri;
+      await saveCoverRemote(entry.id, dataUri);
+    }
+  }
+  closeSettings();
+  renderCollection();
+  alert('Starter collection imported.');
+}
+
+/* Deletes all of this account's data (collection, covers, saved name).
+   Honest limitation: this cannot delete the underlying login/password
+   itself - that requires admin-level access the app deliberately
+   doesn't have client-side, for security reasons. To fully remove a
+   login as well, the project owner can delete it from the Supabase
+   dashboard under Authentication -> Users. This button is what any
+   user can do for themselves without needing that access. */
+async function deleteMyAccount(){
+  if(!authUser || !supabaseClient) return;
+  const ok = await showConfirmDialog(
+    "This permanently deletes your entire collection, all cover images, and your saved name. This cannot be undone. Continue?",
+    'Delete everything'
+  );
+  if(!ok) return;
+  try{
+    await supabaseClient.from('collections').delete().eq('user_id', authUser.id);
+    await supabaseClient.from('covers').delete().eq('user_id', authUser.id);
+    await supabaseClient.from('profiles').delete().eq('user_id', authUser.id);
+    await supabaseClient.auth.signOut();
+  }catch(e){ /* still reset the UI below even if a step failed partway */ }
+  entries = [];
+  coverCache = {};
+  closeSettings();
+  showAuthGateUI();
+  alert('Your data has been deleted.');
+}
+
 function signOutOfAccount(){
   if(isTutorial){
     isTutorial = false;
