@@ -1519,7 +1519,7 @@ function listRowHTML(e){
       <div class="list-cover" style="${bgStyle}"></div>
       <div class="list-name">${escapeHTML(e.name)}</div>
       <span class="list-stats">${countsText(e)}</span>
-      <span class="cat-pill list-status-pill status-${e.status}">${e.status==='completed'?'Completed':'Ongoing'}</span>
+      <span class="cat-pill list-status-pill status-${e.status}">${e.status==='completed'?'Fully published':'Ongoing'}</span>
     </div>
     ${e.volumes.length ? `<div class="list-spines">${listSpinesHTML(e)}</div>` : ''}
   </div>`;
@@ -1530,7 +1530,8 @@ function renderHeaderStats(){
   if(!el) return;
   if(entries.length === 0){ el.textContent = ''; return; }
   const completedCount = entries.filter(isComplete).length;
-  el.innerHTML = `<b>${entries.length}</b> series · <b>${completedCount}</b> completed`;
+  const totalOwned = entries.reduce((sum, e)=> sum + countOwned(e), 0);
+  el.innerHTML = `<b>${entries.length}</b> series · <b>${totalOwned}</b> books · <b>${completedCount}</b> fully owned`;
 }
 
 function renderCollection(){
@@ -1711,7 +1712,7 @@ function detailHTML(e){
         <input type="text" class="ef-name" value="${escapeAttr(e.name)}" placeholder="Series name">
         <select class="ef-status">
           <option value="ongoing" ${e.status==='ongoing'?'selected':''}>Ongoing</option>
-          <option value="completed" ${e.status==='completed'?'selected':''}>Completed</option>
+          <option value="completed" ${e.status==='completed'?'selected':''}>Fully published</option>
         </select>
         <div class="ef-total-wrap" style="grid-column:1/-1;display:${e.status==='completed'?'block':'none'};">
           <input type="text" class="ef-total" style="width:100%;" value="${e.status==='completed'?e.total:e.volumes.length}" placeholder="Total volumes in series">
@@ -1736,7 +1737,7 @@ function detailHTML(e){
     <div class="card-top">
       <div class="name-block">
         <span class="name">${escapeHTML(e.name)}</span>
-        <span class="cat-pill status-${e.status}">${e.status==='completed'?'Completed':'Ongoing'}</span>
+        <span class="cat-pill status-${e.status}">${e.status==='completed'?'Fully published':'Ongoing'}</span>
         ${complete ? '<span class="seal" title="Complete">✓</span>' : ''}
       </div>
       <span class="count">${countsText(e)}</span>
@@ -1936,7 +1937,7 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
       <input type="text" id="new-name" placeholder="Series name">
       <select id="new-status">
         <option value="ongoing">Ongoing</option>
-        <option value="completed">Completed</option>
+        <option value="completed">Fully published</option>
       </select>
       <input type="text" id="new-owned" placeholder="Owned so far" value="0">
       <div id="new-total-wrap" style="grid-column:1/-1;display:none;">
