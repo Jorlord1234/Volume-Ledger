@@ -1210,7 +1210,7 @@ function ensureVolumes(e){
 function countOwned(e){ return e.volumes.filter(v=>v==='owned').length; }
 function countOrdered(e){ return e.volumes.filter(v=>v==='ordered').length; }
 function countSecured(e){ return e.volumes.filter(v=>v!=='missing').length; }
-function isComplete(e){ return e.status==='completed' && e.total>0 && countSecured(e)>=e.total; }
+function isComplete(e){ return e.status==='completed' && e.total>0 && countOwned(e)>=e.total; }
 
 /* ============================================================
    COMPLETION WAVE
@@ -1939,9 +1939,9 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
         <option value="ongoing">Ongoing</option>
         <option value="completed">Fully published</option>
       </select>
-      <input type="text" id="new-owned" placeholder="Owned so far" value="0">
+      <input type="text" id="new-owned" placeholder="Owned so far">
       <div id="new-total-wrap" style="grid-column:1/-1;display:none;">
-        <input type="text" id="new-total" style="width:100%;" placeholder="Total volumes in series" value="1">
+        <input type="text" id="new-total" style="width:100%;" placeholder="Total volumes in series">
       </div>
       <textarea id="new-notes" placeholder="Notes (optional)"></textarea>
       <div class="cover-editor">
@@ -2490,12 +2490,15 @@ async function boot(){
     return;
   }
 
-  // Auto-enters the app from a restored session (Supabase keeps you
-  // signed in for months by default) - the earlier timing bug that
-  // caused this to silently show no covers is now fixed directly in
-  // preloadCoversFromSupabase() instead of working around it here.
+  // Deliberately NOT auto-entering from a restored session on load
+  // (INITIAL_SESSION) - that path is what caused covers to silently
+  // fail and what correlates with the unexpected sign-outs. Always
+  // showing the login screen sidesteps both, at the cost of one more
+  // tap - a fair trade given Google Sign-In makes that tap fast.
+  // SIGNED_IN is still handled because Google's redirect-based flow
+  // genuinely depends on it to complete at all.
   supabaseClient.auth.onAuthStateChange((event, session)=>{
-    if((event === 'INITIAL_SESSION' || event === 'SIGNED_IN') && session && session.user && !authUser){
+    if(event === 'SIGNED_IN' && session && session.user && !authUser){
       enterApp(session.user);
     }
     if(event === 'PASSWORD_RECOVERY'){
