@@ -79,7 +79,7 @@ header::after{
   background:linear-gradient(to right, var(--gold), var(--border) 30%, var(--border) 100%);
   opacity:0.6;
 }
-.title-row{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;}
+.title-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
 h1{
   font-family:'Shippori Mincho',serif;
   font-weight:700;
@@ -87,14 +87,15 @@ h1{
   margin:0;
   letter-spacing:0.3px;
 }
-.title-row .kanji{
+.title-row .header-icon{
   color:var(--red);
-  font-family:'Shippori Mincho',serif;
-  font-size:24px;
   position:relative;
   padding-right:12px;
+  flex-shrink:0;
+  display:inline-flex;
+  align-items:center;
 }
-.title-row .kanji::after{
+.title-row .header-icon::after{
   content:'';
   position:absolute;
   right:0;top:50%;
@@ -111,6 +112,13 @@ h1{
   letter-spacing:1.6px;
   font-weight:500;
 }
+.header-stats{
+  color:var(--muted);
+  font-size:12px;
+  margin:4px 0 0;
+  font-family:'JetBrains Mono',monospace;
+}
+.header-stats b{color:var(--text);font-weight:600;}
 
 /* STORAGE NOTICE */
 .storage-notice{
@@ -343,7 +351,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   padding:60px 20px;
   color:var(--muted);
 }
-.empty .kanji{font-family:'Shippori Mincho',serif;font-size:28px;color:var(--border);display:block;margin-bottom:10px;}
+.empty .empty-icon{color:var(--border);display:block;margin:0 auto 10px;}
 
 #addRow{
   position:relative;
@@ -356,7 +364,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   box-sizing:border-box;
 }
 #addRow::before{
-  content:'新 New Entry';
+  content:'New Entry';
   position:absolute;
   top:-11px;left:14px;
   background:var(--red);
@@ -514,6 +522,13 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 .spine:hover{transform:scaleY(1.15);}
 .spine.owned{background:var(--gold);}
 .spine.owned.complete{background:var(--green);}
+@keyframes spineWave{
+  0%{ transform:translateY(0); }
+  35%{ transform:translateY(-7px); }
+  65%{ transform:translateY(0); }
+  100%{ transform:translateY(0); }
+}
+.spine.wave{ animation:spineWave 0.4s ease; }
 .spine.ordered{background:var(--blue);}
 
 .notes{
@@ -831,7 +846,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 <div id="authGate" class="auth-gate">
   <div class="auth-card">
     <div class="title-row" style="margin-bottom:4px;">
-      <span class="kanji">巻</span>
+      <svg class="header-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A2.5 2.5 0 0 1 4.5 2H12v18H4.5A2.5 2.5 0 0 1 2 17.5v-13Z"/><path d="M22 4.5A2.5 2.5 0 0 0 19.5 2H12v18h7.5a2.5 2.5 0 0 0 2.5-2.5v-13Z"/></svg>
       <h1 style="font-size:26px;">The Volume Ledger</h1>
     </div>
     <p class="subtitle" style="margin-bottom:22px;">Your book collection, volume by volume.</p>
@@ -866,10 +881,11 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 <div class="wrap" id="mainApp" style="display:none;">
   <header>
     <div class="title-row">
-      <span class="kanji">巻</span>
+      <svg class="header-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A2.5 2.5 0 0 1 4.5 2H12v18H4.5A2.5 2.5 0 0 1 2 17.5v-13Z"/><path d="M22 4.5A2.5 2.5 0 0 0 19.5 2H12v18h7.5a2.5 2.5 0 0 0 2.5-2.5v-13Z"/></svg>
       <h1>The Volume Ledger</h1>
     </div>
     <p class="subtitle">Your book collection, volume by volume.</p>
+    <p class="header-stats" id="headerStats"></p>
   </header>
 
   <div id="storageNotice" style="display:none;"></div>
@@ -881,6 +897,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
     </div>
     <select id="sort">
       <option value="name">Sort: Name (A–Z)</option>
+      <option value="recent">Sort: Recently added</option>
       <option value="progress-desc">Sort: Most complete</option>
       <option value="progress-asc">Sort: Least complete</option>
       <option value="owned-desc">Sort: Most owned</option>
@@ -899,7 +916,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 
   <div class="grid" id="grid"></div>
   <div class="empty" id="emptyState" style="display:none;">
-    <span class="kanji">空</span>
+    <svg class="empty-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A2.5 2.5 0 0 1 4.5 2H12v18H4.5A2.5 2.5 0 0 1 2 17.5v-13Z"/><path d="M22 4.5A2.5 2.5 0 0 0 19.5 2H12v18h7.5a2.5 2.5 0 0 0 2.5-2.5v-13Z"/></svg>
     Nothing here yet. Add a series to start your ledger.
   </div>
 </div>
@@ -1195,6 +1212,41 @@ function countOrdered(e){ return e.volumes.filter(v=>v==='ordered').length; }
 function countSecured(e){ return e.volumes.filter(v=>v!=='missing').length; }
 function isComplete(e){ return e.status==='completed' && e.total>0 && countSecured(e)>=e.total; }
 
+/* ============================================================
+   COMPLETION WAVE
+   When a series crosses from "not complete" to "complete" during
+   the session, the spines jump in a staggered wave as a small
+   celebratory moment. Doesn't fire on initial load (only entries
+   that were already complete when the collection loaded are seeded
+   into completedIds below) or when just re-rendering for unrelated
+   reasons.
+   ============================================================ */
+let completedIds = new Set();
+
+function seedCompletedIds(){
+  completedIds = new Set(entries.filter(isComplete).map(e=>e.id));
+}
+
+// Call right before re-rendering after any change that could affect
+// completion. Returns true exactly once, the moment it happens.
+function checkCompletionTransition(entry){
+  const now = isComplete(entry);
+  const was = completedIds.has(entry.id);
+  if(now && !was){
+    completedIds.add(entry.id);
+    return true;
+  }
+  if(!now) completedIds.delete(entry.id);
+  return false;
+}
+
+function triggerSpineWave(){
+  const spineEls = document.querySelectorAll('#modal .spine');
+  spineEls.forEach((el, i)=>{
+    setTimeout(()=>{ el.classList.add('wave'); }, i * 22);
+  });
+}
+
 function hashHue(str){
   let h=0;
   for(let i=0;i<str.length;i++) h = str.charCodeAt(i) + ((h<<5)-h);
@@ -1268,6 +1320,7 @@ async function loadRealCollection(){
     entries = [];
   }
   entries.forEach(ensureVolumes);
+  seedCompletedIds();
   await preloadCoversFromSupabase();
   render();
 }
@@ -1401,6 +1454,7 @@ function getFiltered(){
   let list = entries.filter(e=> e.name.toLowerCase().includes(searchTerm.toLowerCase()));
   const progress = e => e.total>0 ? countSecured(e)/e.total : 0;
   if(sortMode==='name') list.sort((a,b)=>a.name.localeCompare(b.name));
+  if(sortMode==='recent') list.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
   if(sortMode==='progress-desc') list.sort((a,b)=>progress(b)-progress(a));
   if(sortMode==='progress-asc') list.sort((a,b)=>progress(a)-progress(b));
   if(sortMode==='owned-desc') list.sort((a,b)=>countSecured(b)-countSecured(a));
@@ -1471,7 +1525,16 @@ function listRowHTML(e){
   </div>`;
 }
 
+function renderHeaderStats(){
+  const el = document.getElementById('headerStats');
+  if(!el) return;
+  if(entries.length === 0){ el.textContent = ''; return; }
+  const completedCount = entries.filter(isComplete).length;
+  el.innerHTML = `<b>${entries.length}</b> series · <b>${completedCount}</b> completed`;
+}
+
 function renderCollection(){
+  renderHeaderStats();
   const list = getFiltered();
   const container = document.getElementById('grid');
   const emptyEl = document.getElementById('emptyState');
@@ -1483,9 +1546,11 @@ function renderCollection(){
 
   if(list.length===0){
     emptyEl.style.display = 'block';
+    const bookIcon = '<svg class="empty-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A2.5 2.5 0 0 1 4.5 2H12v18H4.5A2.5 2.5 0 0 1 2 17.5v-13Z"/><path d="M22 4.5A2.5 2.5 0 0 0 19.5 2H12v18h7.5a2.5 2.5 0 0 0 2.5-2.5v-13Z"/></svg>';
+    const searchIcon = '<svg class="empty-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
     emptyEl.innerHTML = searchTerm.trim()
-      ? `<span class="kanji">無</span>No series match "${escapeHTML(searchTerm)}".`
-      : `<span class="kanji">空</span>Nothing here yet. Add a series to start your ledger.`;
+      ? `${searchIcon}No series match "${escapeHTML(searchTerm)}".`
+      : `${bookIcon}Nothing here yet. Add a series to start your ledger.`;
   } else {
     emptyEl.style.display = 'none';
   }
@@ -1580,9 +1645,11 @@ function showVolumeMenu(el, entry, idx){
         entry.volumes[idx] = btn.dataset.status;
       }
       closeVolumeMenu();
+      const justCompleted = checkCompletionTransition(entry);
       await saveEntries();
       renderModal();
       renderCollection();
+      if(justCompleted) triggerSpineWave();
     });
   });
   volMenuEl = menu;
@@ -1729,6 +1796,8 @@ function renderModal(){
   async function addNextVolume(){
     if(addVolumeBusy) return;
     addVolumeBusy = true;
+    if(addVolBtn) addVolBtn.disabled = true;
+    if(addVolChip) addVolChip.style.pointerEvents = 'none';
     entry.volumes.push('owned');
     await saveEntries();
     addVolumeBusy = false;
@@ -1736,9 +1805,9 @@ function renderModal(){
     renderCollection();
   }
   const addVolBtn = modal.querySelector('.add-volume-btn');
-  if(addVolBtn) addVolBtn.addEventListener('click', addNextVolume);
+  if(addVolBtn) addVolBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); addNextVolume(); });
   const addVolChip = modal.querySelector('#addVolChip');
-  if(addVolChip) addVolChip.addEventListener('click', addNextVolume);
+  if(addVolChip) addVolChip.addEventListener('click', (ev)=>{ ev.stopPropagation(); addNextVolume(); });
 
   const editBtn = modal.querySelector('.edit-btn');
   if(editBtn) editBtn.addEventListener('click', ()=>{ editingInModal = true; renderModal(); });
@@ -1785,9 +1854,11 @@ function renderModal(){
     }
     ensureVolumes(entry); // pads/strips missing volumes to match the new status
     editingInModal = false;
+    const justCompleted = checkCompletionTransition(entry);
     await saveEntries();
     renderModal();
     renderCollection();
+    if(justCompleted) triggerSpineWave();
   });
 
   const coverInput = modal.querySelector('.ef-cover-input');
@@ -1904,9 +1975,9 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
       const total = Math.max(owned, parseInt(document.getElementById('new-total').value)||owned||1);
       const volumes = [];
       for(let i=0;i<total;i++) volumes.push(i<owned ? 'owned' : 'missing');
-      entry = {id: uid(), name, status, total, notes, hasCover:false, volumes};
+      entry = {id: uid(), name, status, total, notes, hasCover:false, volumes, createdAt: Date.now()};
     } else {
-      entry = {id: uid(), name, status, notes, hasCover:false, volumes: new Array(owned).fill('owned')};
+      entry = {id: uid(), name, status, notes, hasCover:false, volumes: new Array(owned).fill('owned'), createdAt: Date.now()};
     }
     if(pendingCoverFile){
       try{
@@ -1999,10 +2070,6 @@ function renderSettings(){
     </div>
     <p class="settings-note">This only changes colors on this device. If you share this app's link with anyone, their color choice is separate from yours.</p>
 
-    <div class="settings-section-label">Starter collection (temporary)</div>
-    <p class="settings-note" style="margin-top:0;">Adds the built-in 18-series example collection to whatever's already in this account. Safe to use more than once - it never replaces or removes anything, only adds.</p>
-    <button class="btn btn-ghost" id="settingsImportStarterBtn" style="width:100%;margin-bottom:14px;">Import starter collection</button>
-
     <div class="settings-section-label">Account</div>
     <div class="auth-field auth-password-field">
       <input type="password" id="settingsNewPassword" placeholder="New password">
@@ -2038,7 +2105,6 @@ function renderSettings(){
     closeSettings();
     signOutOfAccount();
   });
-  document.getElementById('settingsImportStarterBtn').addEventListener('click', importStarterCollection);
   document.getElementById('settingsDeleteAccountBtn').addEventListener('click', deleteMyAccount);
   document.getElementById('settingsCloseBtn').addEventListener('click', closeSettings);
   modal.querySelectorAll('.theme-swatch').forEach(sw=>{
@@ -2334,6 +2400,7 @@ function enterTutorial(){
   authUser = null;
   entries = buildTutorialData();
   coverCache = {};
+  seedCompletedIds();
   document.getElementById('authGate').style.display = 'none';
   document.getElementById('tutorialBanner').style.display = 'flex';
   document.getElementById('mainApp').style.display = 'block';
@@ -2361,29 +2428,6 @@ document.getElementById('exitTutorialBtn').addEventListener('click', ()=>{
 /* ============================================================
    ACCOUNT ACTIONS (called from the Settings panel)
    ============================================================ */
-async function importStarterCollection(){
-  const ok = await showConfirmDialog('Add the built-in starter collection (18 example series) to your current collection?', 'Import');
-  if(!ok) return;
-  const additions = seedData.map(original => {
-    const copy = JSON.parse(JSON.stringify(original));
-    const newId = uid();
-    copy.id = newId;
-    return { originalId: original.id, entry: copy };
-  });
-  entries = entries.concat(additions.map(a => a.entry));
-  await saveEntries();
-  for(const { originalId, entry } of additions){
-    if(entry.hasCover && BUNDLED_COVERS_MAP[originalId]){
-      const dataUri = BUNDLED_COVERS_MAP[originalId];
-      coverCache[entry.id] = dataUri;
-      await saveCoverRemote(entry.id, dataUri);
-    }
-  }
-  closeSettings();
-  renderCollection();
-  alert('Starter collection imported.');
-}
-
 /* Deletes all of this account's data (collection, covers, saved name).
    Honest limitation: this cannot delete the underlying login/password
    itself - that requires admin-level access the app deliberately
