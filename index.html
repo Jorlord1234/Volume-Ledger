@@ -262,6 +262,12 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   position:absolute;bottom:0;left:0;height:3px;z-index:1;
   background:var(--gold);
 }
+.tile-favorite{
+  position:absolute;top:8px;left:8px;z-index:1;
+  color:var(--gold);
+  font-size:16px;
+  text-shadow:0 1px 3px rgba(0,0,0,0.7);
+}
 
 /* LIST VIEW */
 .list{
@@ -440,6 +446,17 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   padding-right:24px;
 }
 .name-block{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.favorite-btn{
+  background:none;
+  border:none;
+  color:var(--muted);
+  font-size:20px;
+  line-height:1;
+  cursor:pointer;
+  padding:0 2px;
+}
+.favorite-btn.active{color:var(--gold);}
+.favorite-btn:hover{opacity:0.8;}
 .name{font-weight:600;font-size:18px;}
 .seal{
   width:32px;
@@ -643,6 +660,18 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 .vchip.add-vchip:hover{border-color:var(--gold);color:var(--gold);}
 
 /* COVER EDITOR */
+.avatar-row{
+  display:flex;
+  align-items:center;
+  gap:14px;
+}
+.avatar-preview{
+  width:56px;height:56px;
+  border-radius:50%;
+  background:var(--surface-alt);
+  border:1px solid var(--border);
+  flex-shrink:0;
+}
 .cover-editor{
   grid-column:1/-1;
   display:flex;
@@ -898,6 +927,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
     <select id="sort">
       <option value="name">Sort: Name (A–Z)</option>
       <option value="recent">Sort: Recently added</option>
+      <option value="favorites">Sort: Favorites first</option>
       <option value="progress-desc">Sort: Most complete</option>
       <option value="progress-asc">Sort: Least complete</option>
       <option value="owned-desc">Sort: Most owned</option>
@@ -1322,7 +1352,20 @@ async function loadRealCollection(){
   entries.forEach(ensureVolumes);
   seedCompletedIds();
   await preloadCoversFromSupabase();
+  await preloadAvatar();
   render();
+}
+
+async function preloadAvatar(){
+  if(!authUser || !supabaseClient) return;
+  try{
+    const { data, error } = await supabaseClient
+      .from('covers').select('data')
+      .eq('user_id', authUser.id).eq('series_id', '__avatar__')
+      .maybeSingle();
+    if(error) throw error;
+    if(data && data.data) coverCache['__avatar__'] = data.data;
+  }catch(e){ /* no avatar set yet - that's fine */ }
 }
 
 async function preloadCoversFromSupabase(){
@@ -1455,6 +1498,7 @@ function getFiltered(){
   const progress = e => e.total>0 ? countSecured(e)/e.total : 0;
   if(sortMode==='name') list.sort((a,b)=>a.name.localeCompare(b.name));
   if(sortMode==='recent') list.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  if(sortMode==='favorites') list.sort((a,b)=>(b.favorite?1:0)-(a.favorite?1:0) || a.name.localeCompare(b.name));
   if(sortMode==='progress-desc') list.sort((a,b)=>progress(b)-progress(a));
   if(sortMode==='progress-asc') list.sort((a,b)=>progress(a)-progress(b));
   if(sortMode==='owned-desc') list.sort((a,b)=>countSecured(b)-countSecured(a));
@@ -1497,6 +1541,7 @@ function tileHTML(e){
   return `
   <div class="tile" style="${bgStyle}" data-id="${e.id}">
     ${complete ? '<span class="tile-seal">✓</span>' : ''}
+    ${e.favorite ? '<span class="tile-favorite">★</span>' : ''}
     ${pct!==null ? `<span class="tile-progress" style="width:${pct}%;"></span>` : ''}
     <div class="tile-title">${escapeHTML(e.name)}</div>
   </div>`;
@@ -1517,8 +1562,9 @@ function listRowHTML(e){
   <div class="list-row" data-id="${e.id}">
     <div class="list-row-top">
       <div class="list-cover" style="${bgStyle}"></div>
-      <div class="list-name">${escapeHTML(e.name)}</div>
+      <div class="list-name">${e.favorite ? '<span style="color:var(--gold);">★</span> ' : ''}${escapeHTML(e.name)}</div>
       <span class="list-stats">${countsText(e)}</span>
+      ${e.currentlyReading ? '<span class="cat-pill" style="border-color:var(--blue);color:var(--blue);">Reading</span>' : ''}
       <span class="cat-pill list-status-pill status-${e.status}">${e.status==='completed'?'Fully published':'Ongoing'}</span>
     </div>
     ${e.volumes.length ? `<div class="list-spines">${listSpinesHTML(e)}</div>` : ''}
@@ -1738,12 +1784,15 @@ function detailHTML(e){
       <div class="name-block">
         <span class="name">${escapeHTML(e.name)}</span>
         <span class="cat-pill status-${e.status}">${e.status==='completed'?'Fully published':'Ongoing'}</span>
+        ${e.currentlyReading ? '<span class="cat-pill" style="border-color:var(--blue);color:var(--blue);">Reading</span>' : ''}
         ${complete ? '<span class="seal" title="Complete">✓</span>' : ''}
+        <button class="favorite-btn ${e.favorite?'active':''}" id="favoriteBtn" title="${e.favorite?'Remove from favorites':'Add to favorites'}">${e.favorite?'★':'☆'}</button>
       </div>
       <span class="count">${countsText(e)}</span>
     </div>
     <div class="actions">
       <button class="icon-btn edit-btn">✎ Edit</button>
+      <button class="icon-btn reading-toggle-btn">${e.currentlyReading ? '✓ Reading now' : '▷ Mark as reading'}</button>
       <button class="icon-btn del-btn">✕ Delete</button>
     </div>
     <div class="spines">${spinesHTML(e)}</div>
@@ -1812,6 +1861,22 @@ function renderModal(){
 
   const editBtn = modal.querySelector('.edit-btn');
   if(editBtn) editBtn.addEventListener('click', ()=>{ editingInModal = true; renderModal(); });
+
+  const favBtn = modal.querySelector('#favoriteBtn');
+  if(favBtn) favBtn.addEventListener('click', async ()=>{
+    entry.favorite = !entry.favorite;
+    await saveEntries();
+    renderModal();
+    renderCollection();
+  });
+
+  const readingBtn = modal.querySelector('.reading-toggle-btn');
+  if(readingBtn) readingBtn.addEventListener('click', async ()=>{
+    entry.currentlyReading = !entry.currentlyReading;
+    await saveEntries();
+    renderModal();
+    renderCollection();
+  });
 
   const delBtn = modal.querySelector('.del-btn');
   if(delBtn) delBtn.addEventListener('click', async ()=>{
@@ -2045,9 +2110,19 @@ function isPresetActive(preset){
 
 function renderSettings(){
   const modal = document.getElementById('settingsModal');
+  const avatarUri = coverCache['__avatar__'];
   modal.innerHTML = `
     <button class="modal-close" id="settingsCloseBtn">&times;</button>
-    <div class="name-block"><span class="name">Theme</span></div>
+    <div class="name-block" style="margin-bottom:10px;"><span class="name">Profile</span></div>
+    <div class="avatar-row">
+      <div class="avatar-preview" style="${avatarUri ? `background-image:url('${avatarUri}');background-size:cover;background-position:center;` : ''}"></div>
+      <div>
+        <label class="btn btn-ghost cover-upload-btn">${avatarUri?'Change avatar':'Add avatar'}<input type="file" accept="image/*" id="avatarInput" style="display:none;"></label>
+        ${avatarUri ? '<button type="button" class="btn btn-ghost" id="removeAvatarBtn" style="margin-left:6px;">Remove</button>' : ''}
+      </div>
+    </div>
+
+    <div class="name-block" style="margin-bottom:10px;margin-top:20px;"><span class="name">Theme</span></div>
     <div class="settings-section-label">Presets</div>
     <div class="theme-grid" id="themeGrid">
       ${THEME_PRESETS.map((p, i) => `
@@ -2108,6 +2183,22 @@ function renderSettings(){
   });
   document.getElementById('settingsDeleteAccountBtn').addEventListener('click', deleteMyAccount);
   document.getElementById('settingsCloseBtn').addEventListener('click', closeSettings);
+  document.getElementById('avatarInput').addEventListener('change', async (ev)=>{
+    const file = ev.target.files[0];
+    if(!file) return;
+    try{
+      const dataUri = await readAndCompressImage(file);
+      coverCache['__avatar__'] = dataUri;
+      await saveCoverRemote('__avatar__', dataUri);
+      renderSettings();
+    }catch(err){ /* ignore */ }
+  });
+  const removeAvatarBtn = document.getElementById('removeAvatarBtn');
+  if(removeAvatarBtn) removeAvatarBtn.addEventListener('click', async ()=>{
+    delete coverCache['__avatar__'];
+    await deleteCoverRemote('__avatar__');
+    renderSettings();
+  });
   modal.querySelectorAll('.theme-swatch').forEach(sw=>{
     sw.addEventListener('click', async ()=>{
       const preset = THEME_PRESETS[Number(sw.dataset.idx)];
