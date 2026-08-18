@@ -457,6 +457,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .favorite-btn.active{color:var(--gold);}
 .favorite-btn:hover{opacity:0.8;}
+.source-note{font-size:11px;color:var(--muted);margin-top:2px;}
 .name{font-weight:600;font-size:18px;}
 .seal{
   width:32px;
@@ -815,6 +816,43 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   margin:16px 0 10px;
 }
 .settings-section-label:first-child{margin-top:0;}
+/* ADD FLOW: CATALOG VS PRIVATE */
+.add-choice{display:flex;flex-direction:column;gap:8px;}
+.add-choice-btn{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  text-align:left;
+  padding:12px 14px;
+  width:100%;
+}
+.add-choice-icon{font-size:20px;flex-shrink:0;}
+.add-choice-btn b{display:block;font-size:14px;color:var(--text);}
+.add-choice-btn small{display:block;font-size:11px;color:var(--muted);margin-top:2px;font-weight:400;}
+.catalog-results{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  margin-top:10px;
+  max-height:240px;
+  overflow-y:auto;
+}
+.catalog-result{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:9px 12px;
+  border-radius:7px;
+  background:var(--surface-alt);
+  cursor:pointer;
+  font-size:13px;
+}
+.catalog-result:hover{background:var(--border);}
+.catalog-result-meta{font-size:11px;color:var(--muted);white-space:nowrap;}
+.catalog-result-new{border:1px dashed var(--border);background:transparent;color:var(--gold);}
+.catalog-result-new:hover{border-color:var(--gold);}
+
 .theme-grid{
   display:grid;
   grid-template-columns:repeat(auto-fill, minmax(110px, 1fr));
@@ -1790,6 +1828,7 @@ function detailHTML(e){
       </div>
       <span class="count">${countsText(e)}</span>
     </div>
+    <div class="source-note">${e.catalogId ? '🌐 From the shared catalog — status and volume count come from there' : '🔒 Private — visible only to you'}</div>
     <div class="actions">
       <button class="icon-btn edit-btn">✎ Edit</button>
       <button class="icon-btn reading-toggle-btn">${e.currentlyReading ? '✓ Reading now' : '▷ Mark as reading'}</button>
@@ -1997,6 +2036,205 @@ document.addEventListener('keydown', (e)=>{
 const addRow = document.getElementById('addRow');
 document.getElementById('showAddBtn').addEventListener('click', ()=>{
   addRow.style.display = addRow.style.display==='none' ? 'block' : 'none';
+  if(addRow.style.display==='none') return;
+  renderAddChoice();
+});
+
+function renderAddChoice(){
+  addRow.innerHTML = `
+    <div class="add-choice">
+      <button class="btn btn-ghost add-choice-btn" id="chooseCatalogBtn">
+        <span class="add-choice-icon">🌐</span>
+        <span>
+          <b>Search catalog</b>
+          <small>Find a known series - status and volume count fill in automatically</small>
+        </span>
+      </button>
+      <button class="btn btn-ghost add-choice-btn" id="choosePrivateBtn">
+        <span class="add-choice-icon">🔒</span>
+        <span>
+          <b>Add private series</b>
+          <small>Not in a shared catalog - you fill in everything yourself</small>
+        </span>
+      </button>
+    </div>
+    <div class="edit-actions" style="margin-top:10px;">
+      <button class="btn btn-ghost" id="cancelAddChoice">Cancel</button>
+    </div>
+  `;
+  document.getElementById('chooseCatalogBtn').addEventListener('click', renderCatalogSearch);
+  document.getElementById('choosePrivateBtn').addEventListener('click', ()=> renderPrivateForm());
+  document.getElementById('cancelAddChoice').addEventListener('click', ()=>{ addRow.style.display='none'; });
+}
+
+/* ============================================================
+   CATALOG SEARCH (shared, read by anyone, appended to by anyone
+   logged in - never edited/deleted by regular users, so a series
+   name always points to one consistent id instead of fragmenting
+   into near-duplicate entries)
+   ============================================================ */
+let catalogSearchTimer = null;
+
+function renderCatalogSearch(){
+  addRow.innerHTML = `
+    <div class="auth-field">
+      <input type="text" id="catalogSearchInput" placeholder="Start typing a series name..." autocomplete="off">
+    </div>
+    <div id="catalogResults" class="catalog-results"></div>
+    <div class="edit-actions" style="margin-top:10px;">
+      <button class="btn btn-ghost" id="backToChoice">Back</button>
+    </div>
+  `;
+  document.getElementById('backToChoice').addEventListener('click', renderAddChoice);
+  const input = document.getElementById('catalogSearchInput');
+  input.addEventListener('input', ()=>{
+    clearTimeout(catalogSearchTimer);
+    catalogSearchTimer = setTimeout(()=> runCatalogSearch(input.value.trim()), 250);
+  });
+  input.focus();
+}
+
+async function runCatalogSearch(term){
+  const resultsEl = document.getElementById('catalogResults');
+  if(!resultsEl) return;
+  if(!term){ resultsEl.innerHTML = ''; return; }
+  resultsEl.innerHTML = `<p class="settings-note">Searching...</p>`;
+  try{
+    const { data, error } = await supabaseClient
+      .from('catalog')
+      .select('id, name, status, total')
+      .ilike('name', `%${term}%`)
+      .limit(8);
+    if(error) throw error;
+    const matches = data || [];
+    resultsEl.innerHTML = `
+      ${matches.map(m => `
+        <div class="catalog-result" data-id="${m.id}" data-name="${escapeAttr(m.name)}" data-status="${m.status}" data-total="${m.total||''}">
+          <span>${escapeHTML(m.name)}</span>
+          <span class="catalog-result-meta">${m.status==='completed' ? `Fully published . ${m.total} vol` : 'Ongoing'}</span>
+        </div>
+      `).join('')}
+      <div class="catalog-result catalog-result-new" id="contributeNewBtn">
+        <span>+ Add "${escapeHTML(term)}" to the catalog</span>
+        <span class="catalog-result-meta">New series</span>
+      </div>
+    `;
+    resultsEl.querySelectorAll('.catalog-result:not(.catalog-result-new)').forEach(row=>{
+      row.addEventListener('click', ()=>{
+        renderCatalogEntryForm({
+          id: row.dataset.id, name: row.dataset.name,
+          status: row.dataset.status, total: row.dataset.total ? Number(row.dataset.total) : null
+        });
+      });
+    });
+    document.getElementById('contributeNewBtn').addEventListener('click', ()=> renderContributeForm(term));
+  }catch(e){
+    resultsEl.innerHTML = `<p class="settings-note">Couldn't search the catalog right now.</p>`;
+  }
+}
+
+// A brand-new series nobody's added to the catalog yet - contributor
+// fills in status/total once, and it becomes the shared canonical
+// entry everyone else's search will find from now on.
+function renderContributeForm(name){
+  addRow.innerHTML = `
+    <div class="edit-grid">
+      <input type="text" id="contrib-name" value="${escapeAttr(name)}" placeholder="Series name" style="grid-column:1/-1;">
+      <select id="contrib-status">
+        <option value="ongoing">Ongoing</option>
+        <option value="completed">Fully published</option>
+      </select>
+      <div id="contrib-total-wrap" style="display:none;">
+        <input type="text" id="contrib-total" placeholder="Total volumes">
+      </div>
+      <div class="edit-actions">
+        <button class="btn btn-ghost" id="backToSearch">Back</button>
+        <button class="btn btn-primary" id="submitContribute">Add to catalog</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('contrib-status').addEventListener('change', (ev)=>{
+    document.getElementById('contrib-total-wrap').style.display = ev.target.value==='completed' ? 'block' : 'none';
+  });
+  document.getElementById('backToSearch').addEventListener('click', renderCatalogSearch);
+  document.getElementById('submitContribute').addEventListener('click', async ()=>{
+    const cName = document.getElementById('contrib-name').value.trim();
+    const cStatus = document.getElementById('contrib-status').value;
+    if(!cName){ alert('Series name cannot be empty.'); return; }
+    let cTotal = null;
+    if(cStatus === 'completed'){
+      cTotal = Math.max(1, parseInt(document.getElementById('contrib-total').value)||1);
+    }
+    try{
+      const { data, error } = await supabaseClient.from('catalog').insert({
+        name: cName, status: cStatus, total: cTotal, created_by: authUser ? authUser.id : null
+      }).select('id').single();
+      if(error) throw error;
+      renderCatalogEntryForm({ id: data.id, name: cName, status: cStatus, total: cTotal });
+    }catch(e){
+      alert(e.message || "Couldn't add that to the catalog.");
+    }
+  });
+}
+
+// Final step for a catalog-linked series: status/total come from the
+// catalog and aren't editable here (that's the whole point - one
+// shared, consistent fact) - only the personal fields are collected.
+function renderCatalogEntryForm(catalogEntry){
+  addRow.innerHTML = `
+    <div class="edit-grid">
+      <div style="grid-column:1/-1;font-size:14px;font-weight:600;">${escapeHTML(catalogEntry.name)}</div>
+      <div style="grid-column:1/-1;" class="settings-note">
+        🌐 ${catalogEntry.status==='completed' ? `Fully published . ${catalogEntry.total} volumes` : 'Ongoing (from catalog)'}
+      </div>
+      <input type="text" id="new-owned" placeholder="Owned so far" style="grid-column:1/-1;">
+      <div class="cover-editor">
+        <label class="btn btn-ghost cover-upload-btn">Add cover<input type="file" accept="image/*" id="new-cover-input" style="display:none;"></label>
+        <span id="new-cover-filename" style="font-size:12px;color:var(--muted);"></span>
+      </div>
+      <div class="edit-actions">
+        <button class="btn btn-ghost" id="backToSearch">Back</button>
+        <button class="btn btn-primary" id="confirmCatalogAdd">Add to ledger</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('backToSearch').addEventListener('click', renderCatalogSearch);
+  let pendingCoverFile = null;
+  document.getElementById('new-cover-input').addEventListener('change', (ev)=>{
+    pendingCoverFile = ev.target.files[0] || null;
+    document.getElementById('new-cover-filename').textContent = pendingCoverFile ? pendingCoverFile.name : '';
+  });
+  document.getElementById('confirmCatalogAdd').addEventListener('click', async ()=>{
+    const owned = Math.max(0, parseInt(document.getElementById('new-owned').value)||0);
+    let entry;
+    if(catalogEntry.status === 'completed'){
+      const total = catalogEntry.total;
+      const volumes = [];
+      for(let i=0;i<total;i++) volumes.push(i<owned ? 'owned' : 'missing');
+      entry = {id: uid(), name: catalogEntry.name, status:'completed', total, notes:'', hasCover:false, volumes, createdAt: Date.now(), catalogId: catalogEntry.id};
+    } else {
+      entry = {id: uid(), name: catalogEntry.name, status:'ongoing', notes:'', hasCover:false, volumes: new Array(owned).fill('owned'), createdAt: Date.now(), catalogId: catalogEntry.id};
+    }
+    if(pendingCoverFile){
+      try{
+        const dataUri = await readAndCompressImage(pendingCoverFile);
+        coverCache[entry.id] = dataUri;
+        entry.hasCover = true;
+        await saveCoverRemote(entry.id, dataUri);
+      }catch(err){ /* skip cover on failure */ }
+    }
+    entries.push(entry);
+    addRow.style.display='none';
+    await saveEntries();
+    renderCollection();
+  });
+}
+
+/* ============================================================
+   PRIVATE SERIES (unchanged behavior from before - fully custom,
+   never touches the catalog)
+   ============================================================ */
+function renderPrivateForm(){
   addRow.innerHTML = `
     <div class="edit-grid">
       <input type="text" id="new-name" placeholder="Series name">
@@ -2014,11 +2252,12 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
         <span id="new-cover-filename" style="font-size:12px;color:var(--muted);"></span>
       </div>
       <div class="edit-actions">
-        <button class="btn btn-ghost" id="cancelAdd">Cancel</button>
+        <button class="btn btn-ghost" id="backToChoice">Back</button>
         <button class="btn btn-primary" id="confirmAdd">Add to ledger</button>
       </div>
     </div>
   `;
+  document.getElementById('backToChoice').addEventListener('click', renderAddChoice);
   document.getElementById('new-status').addEventListener('change', (ev)=>{
     document.getElementById('new-total-wrap').style.display = ev.target.value==='completed' ? 'block' : 'none';
   });
@@ -2026,9 +2265,6 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
   document.getElementById('new-cover-input').addEventListener('change', (ev)=>{
     pendingCoverFile = ev.target.files[0] || null;
     document.getElementById('new-cover-filename').textContent = pendingCoverFile ? pendingCoverFile.name : '';
-  });
-  document.getElementById('cancelAdd').addEventListener('click', ()=>{
-    addRow.style.display='none';
   });
   document.getElementById('confirmAdd').addEventListener('click', async ()=>{
     const name = document.getElementById('new-name').value.trim();
@@ -2041,9 +2277,9 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
       const total = Math.max(owned, parseInt(document.getElementById('new-total').value)||owned||1);
       const volumes = [];
       for(let i=0;i<total;i++) volumes.push(i<owned ? 'owned' : 'missing');
-      entry = {id: uid(), name, status, total, notes, hasCover:false, volumes, createdAt: Date.now()};
+      entry = {id: uid(), name, status, total, notes, hasCover:false, volumes, createdAt: Date.now(), catalogId: null};
     } else {
-      entry = {id: uid(), name, status, notes, hasCover:false, volumes: new Array(owned).fill('owned'), createdAt: Date.now()};
+      entry = {id: uid(), name, status, notes, hasCover:false, volumes: new Array(owned).fill('owned'), createdAt: Date.now(), catalogId: null};
     }
     if(pendingCoverFile){
       try{
@@ -2058,8 +2294,7 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
     await saveEntries();
     renderCollection();
   });
-  document.getElementById('new-name').focus();
-});
+}
 
 /* ============================================================
    THEME SETTINGS
