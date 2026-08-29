@@ -457,26 +457,6 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .favorite-btn.active{color:var(--gold);}
 .favorite-btn:hover{opacity:0.8;}
-.source-note{font-size:11px;color:var(--muted);margin-top:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
-.publish-link{
-  background:none;
-  border:none;
-  color:var(--gold);
-  font-size:11px;
-  text-decoration:underline;
-  cursor:pointer;
-  padding:0;
-}
-.private-check{
-  display:flex;
-  align-items:center;
-  gap:8px;
-  font-size:13px;
-  color:var(--text);
-  cursor:pointer;
-  padding:4px 0;
-}
-.private-check input{width:16px;height:16px;cursor:pointer;}
 .name{font-weight:600;font-size:18px;}
 .seal{
   width:32px;
@@ -1357,7 +1337,56 @@ function buildTutorialData(){
 /* ============================================================
    DATA LOADING (Supabase-backed, per signed-in account)
    ============================================================ */
+/* ============================================================
+   LOCAL CACHE FOR OFFLINE USE
+   Every successful sync mirrors your collection and covers into
+   this device's own local storage. On the next open - even fully
+   offline - that cached copy shows immediately instead of an empty
+   screen, and a background sync quietly reconciles once you're back
+   online.
+   ============================================================ */
+function cacheKeyFor(kind){ return `cache:${kind}:${authUser.id}`; }
+
+async function saveLocalCache(){
+  if(!authUser) return;
+  try{
+    await Storage.set(cacheKeyFor('entries'), JSON.stringify(entries), false);
+    await Storage.set(cacheKeyFor('covers'), JSON.stringify(coverCache), false);
+  }catch(e){ /* best effort - not critical if this fails */ }
+}
+
+async function loadLocalCache(){
+  try{
+    const entriesRaw = await Storage.get(cacheKeyFor('entries'), false);
+    const coversRaw = await Storage.get(cacheKeyFor('covers'), false);
+    return {
+      entries: entriesRaw ? JSON.parse(entriesRaw) : null,
+      covers: coversRaw ? JSON.parse(coversRaw) : null
+    };
+  }catch(e){ return {entries:null, covers:null}; }
+}
+
 async function loadRealCollection(){
+  const cached = await loadLocalCache();
+  if(cached.entries){
+    entries = cached.entries;
+    coverCache = Object.assign({}, coverCache, cached.covers || {});
+    entries.forEach(ensureVolumes);
+    seedCompletedIds();
+    render();
+  }
+
+  if(!navigator.onLine){
+    if(cached.entries){
+      showSyncNotice("You're offline — showing your last saved collection. Changes will sync once you're back online.");
+    } else {
+      showSyncNotice("You're offline and nothing is cached on this device yet. Connect once to load your collection.");
+      entries = [];
+      render();
+    }
+    return;
+  }
+
   try{
     const { data, error } = await supabaseClient
       .from('collections')
@@ -1367,6 +1396,10 @@ async function loadRealCollection(){
     if(error) throw error;
     entries = (data && Array.isArray(data.entries)) ? data.entries : [];
   }catch(e){
+    if(cached.entries){
+      showSyncNotice("Couldn't reach your account just now — showing your last saved collection.");
+      return;
+    }
     showSyncNotice("Could not reach your account's data just now. Showing an empty collection - nothing has been lost, try refreshing.");
     entries = [];
   }
@@ -1374,6 +1407,7 @@ async function loadRealCollection(){
   seedCompletedIds();
   await preloadCoversFromSupabase();
   await preloadAvatar();
+  await saveLocalCache();
   render();
 }
 
@@ -1443,6 +1477,7 @@ async function saveEntries(){
   }catch(e){
     entriesDirty = true;
   }
+  await saveLocalCache();
   updateSyncStatus();
 }
 
@@ -1461,6 +1496,7 @@ async function saveCoverRemote(seriesId, dataUri){
   }catch(e){
     pendingCovers.set(seriesId, dataUri);
   }
+  await saveLocalCache();
   updateSyncStatus();
 }
 
@@ -1477,6 +1513,7 @@ async function deleteCoverRemote(seriesId){
   }catch(e){
     pendingCoverDeletes.add(seriesId);
   }
+  await saveLocalCache();
   updateSyncStatus();
 }
 
@@ -2579,6 +2616,11 @@ function signOutOfAccount(){
 /* ============================================================
    BOOT
    ============================================================ */
+window.addEventListener('offline', ()=>{
+  showSyncNotice("You're offline. The app keeps working from what's saved on this device — changes will sync once you're back online.");
+});
+window.addEventListener('online', updateSyncStatus);
+
 async function boot(){
   await loadTheme();
   renderAuthForm();
@@ -2592,15 +2634,13 @@ async function boot(){
     return;
   }
 
-  // Deliberately NOT auto-entering from a restored session on load
-  // (INITIAL_SESSION) - that path is what caused covers to silently
-  // fail and what correlates with the unexpected sign-outs. Always
-  // showing the login screen sidesteps both, at the cost of one more
-  // tap - a fair trade given Google Sign-In makes that tap fast.
-  // SIGNED_IN is still handled because Google's redirect-based flow
-  // genuinely depends on it to complete at all.
+  // Restored sessions now auto-enter the app. This is safe (and
+  // required for offline use) because reading a saved session needs
+  // no network call at all, and loadRealCollection() now falls back
+  // to your last cached collection instead of erroring if the
+  // network genuinely isn't available.
   supabaseClient.auth.onAuthStateChange((event, session)=>{
-    if(event === 'SIGNED_IN' && session && session.user && !authUser){
+    if((event === 'INITIAL_SESSION' || event === 'SIGNED_IN') && session && session.user && !authUser){
       enterApp(session.user);
     }
     if(event === 'PASSWORD_RECOVERY'){
