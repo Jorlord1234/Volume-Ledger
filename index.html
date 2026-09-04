@@ -457,6 +457,16 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .favorite-btn.active{color:var(--gold);}
 .favorite-btn:hover{opacity:0.8;}
+.private-check{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:13px;
+  color:var(--text);
+  cursor:pointer;
+  padding:4px 0;
+}
+.private-check input{width:16px;height:16px;cursor:pointer;flex-shrink:0;}
 .name{font-weight:600;font-size:18px;}
 .seal{
   width:32px;
@@ -1242,6 +1252,10 @@ function countOwned(e){ return e.volumes.filter(v=>v==='owned').length; }
 function countOrdered(e){ return e.volumes.filter(v=>v==='ordered').length; }
 function countSecured(e){ return e.volumes.filter(v=>v!=='missing').length; }
 function isComplete(e){ return e.status==='completed' && e.total>0 && countOwned(e)>=e.total; }
+// Real-world volume numbering doesn't always start at 1 (prologue/vol.0
+// volumes exist) - this is the single source of truth for the label
+// shown on a spine, so it only needs setting in one place.
+function volNum(entry, idx){ return entry.startsAtZero ? idx : idx + 1; }
 
 /* ============================================================
    COMPLETION WAVE
@@ -1675,14 +1689,14 @@ function spinesHTML(entry){
   return entry.volumes.map((status, idx)=>
     `<div class="spine-col">
       <div class="spine ${status!=='missing'?status:''} ${status==='owned'&&complete?'complete':''}" data-idx="${idx}"></div>
-      <span class="spine-num ${status==='missing'?'missing-num':''}">${idx+1}</span>
+      <span class="spine-num ${status==='missing'?'missing-num':''}">${volNum(entry, idx)}</span>
     </div>`
   ).join('');
 }
 
 function volumeEditorHTML(entry){
   let html = entry.volumes.map((status, idx)=>
-    `<div class="vchip ${status!=='missing'?status:''}" data-idx="${idx}">${idx+1}</div>`
+    `<div class="vchip ${status!=='missing'?status:''}" data-idx="${idx}">${volNum(entry, idx)}</div>`
   ).join('');
   if(entry.status === 'ongoing'){
     html += `<div class="vchip add-vchip" id="addVolChip" title="Add the next volume">+</div>`;
@@ -1694,7 +1708,7 @@ function showTooltip(el, entry, idx){
   const status = entry.volumes[idx];
   const tip = document.getElementById('tooltip');
   tip.innerHTML = `
-    <div class="t-vol">Vol ${idx+1}</div>
+    <div class="t-vol">Vol ${volNum(entry, idx)}</div>
     <div class="t-status ${status}">${status}</div>
     <div class="t-hint">Tap to choose a status</div>
   `;
@@ -1823,6 +1837,10 @@ function detailHTML(e){
         <div class="ef-ongoing-note" style="grid-column:1/-1;font-size:12px;color:var(--muted);display:${e.status==='ongoing'?'block':'none'};">
           Ongoing series only track volumes you own or have ordered — use the + chip below to add the next one whenever you get it.
         </div>
+        <label class="private-check" style="grid-column:1/-1;">
+          <input type="checkbox" class="ef-starts-zero" ${e.startsAtZero?'checked':''}>
+          This series has a Volume 0 (numbering starts at 0, not 1)
+        </label>
         <textarea class="ef-notes" placeholder="Notes">${escapeHTML(e.notes||'')}</textarea>
         <div class="cover-editor">
           <label class="btn btn-ghost cover-upload-btn">${e.hasCover?'Change cover':'Add cover'}<input type="file" accept="image/*" class="ef-cover-input" style="display:none;"></label>
@@ -1955,10 +1973,12 @@ function renderModal(){
     const name = modal.querySelector('.ef-name').value.trim();
     const status = modal.querySelector('.ef-status').value;
     const notes = modal.querySelector('.ef-notes').value.trim();
+    const startsAtZero = modal.querySelector('.ef-starts-zero').checked;
     if(!name){ alert('Series name cannot be empty.'); return; }
     entry.name = name;
     entry.status = status;
     entry.notes = notes;
+    entry.startsAtZero = startsAtZero;
     if(status === 'completed'){
       const totalInput = modal.querySelector('.ef-total');
       const minTotal = countSecured(entry);
