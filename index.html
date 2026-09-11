@@ -305,6 +305,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .list-spine-tick.owned{background:var(--gold);}
 .list-spine-tick.ordered{background:var(--blue);}
+.list-spine-tick.planned{background:var(--tick-empty);border:1px dashed var(--muted);}
 .list-cover{
   width:36px;height:50px;
   border-radius:4px;
@@ -557,6 +558,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .spine.wave{ animation:spineWave 0.4s ease; }
 .spine.ordered{background:var(--blue);}
+.spine.planned{background:var(--tick-empty);border:1px dashed var(--muted);}
 
 .notes{
   margin-top:14px;
@@ -580,6 +582,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 .dot.owned{background:var(--gold);}
 .dot.ordered{background:var(--blue);}
 .dot.missing{background:var(--tick-empty);}
+.dot.planned{background:var(--tick-empty);border:1px dashed var(--muted);}
 
 /* TOOLTIP */
 #tooltip{
@@ -613,6 +616,8 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   border-radius:8px;
   padding:5px;
   display:flex;
+  flex-wrap:wrap;
+  max-width:220px;
   gap:4px;
   box-shadow:0 8px 24px rgba(0,0,0,0.5);
 }
@@ -626,11 +631,14 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   color:var(--text);
   background:var(--surface);
   transition:opacity .1s;
+  white-space:nowrap;
 }
 .vol-menu button:hover{opacity:0.8;}
 .vol-menu button.vm-owned.active{background:var(--gold);color:#1a1a1a;}
 .vol-menu button.vm-ordered.active{background:var(--blue);color:#fff;}
 .vol-menu button.vm-missing.active{background:var(--tick-empty);}
+.vol-menu button.vm-planned.active{background:var(--tick-empty);border:1px dashed var(--muted);}
+.vol-menu button.vm-price{background:var(--surface);color:var(--gold);}
 
 /* VOLUME EDIT GRID */
 .vol-editor{
@@ -660,6 +668,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 .vchip:hover{transform:scale(1.08);}
 .vchip.owned{background:var(--gold);color:#1a1a1a;}
 .vchip.ordered{background:var(--blue);color:#fff;}
+.vchip.planned{background:var(--tick-empty);border:1px dashed var(--muted);}
 .vchip.add-vchip{
   background:transparent;
   border:1px dashed var(--border);
@@ -1241,6 +1250,8 @@ function ensureVolumes(e){
     }
     e.total = total;
   } else {
+    // 'planned' placeholders are kept - only real 'missing' gaps (which
+    // shouldn't occur on ongoing series, but may from old data) get stripped.
     if(e.volumes.some(v => v === 'missing')){
       e.volumes = e.volumes.filter(v => v !== 'missing');
     }
@@ -1250,12 +1261,34 @@ function ensureVolumes(e){
 
 function countOwned(e){ return e.volumes.filter(v=>v==='owned').length; }
 function countOrdered(e){ return e.volumes.filter(v=>v==='ordered').length; }
+function countPlanned(e){ return e.volumes.filter(v=>v==='planned').length; }
 function countSecured(e){ return e.volumes.filter(v=>v!=='missing').length; }
 function isComplete(e){ return e.status==='completed' && e.total>0 && countOwned(e)>=e.total; }
 // Real-world volume numbering doesn't always start at 1 (prologue/vol.0
 // volumes exist) - this is the single source of truth for the label
 // shown on a spine, so it only needs setting in one place.
 function volNum(entry, idx){ return entry.startsAtZero ? idx : idx + 1; }
+
+/* ============================================================
+   PRICE TRACKER
+   Price lives per-entry (default price/volume) with optional
+   per-volume overrides for rare/out-of-print books. Only volumes
+   marked "owned" count toward value - ordered/planned/missing don't.
+   ============================================================ */
+function volumePrice(e, idx){
+  if(e.priceOverrides && e.priceOverrides[idx] != null) return Number(e.priceOverrides[idx]);
+  return Number(e.pricePerVolume) || 0;
+}
+function seriesValue(e){
+  return e.volumes.reduce((sum, status, idx) =>
+    status === 'owned' ? sum + volumePrice(e, idx) : sum, 0);
+}
+function collectionValue(){
+  return entries.reduce((sum, e) => sum + seriesValue(e), 0);
+}
+function formatCurrency(n){
+  return new Intl.NumberFormat(undefined, {style:'currency', currency:'EUR'}).format(n || 0);
+}
 
 /* ============================================================
    COMPLETION WAVE
@@ -1320,6 +1353,123 @@ try{
 
 let authUser = null;      // the signed-in Supabase user, or null
 let isTutorial = false;   // true while browsing the example tutorial data
+
+/* ============================================================
+   PREMIUM / PAYWALL
+   Premium status lives on the account (profiles.is_premium in
+   Supabase), never just in localStorage - a client-only flag is
+   trivially editable in devtools and wouldn't actually gate
+   anything. Here it's unlocked with a code instead of real payment -
+   see the SQL note above for the "profiles needs an update policy"
+   step this depends on.
+   ============================================================ */
+const FREE_SERIES_LIMIT = 3;
+const FREE_BOOKS_LIMIT = 50;
+
+// This is the "family secret password" that unlocks premium. Change it
+// to whatever you want, then tell your brother the code (don't share it
+// publicly - anyone who has it can unlock premium, and since this check
+// runs in the browser, someone technical enough could also find it in
+// the page source). Good enough for a private app between siblings; not
+// meant to stand in for real payment security.
+const UNLOCK_CODE = "VOLUMELEDGER";
+
+function isPremium(){
+  return !!(authUser && authUser.is_premium);
+}
+function totalBooksTracked(){
+  return entries.reduce((sum, e) => sum + e.volumes.length, 0);
+}
+function wouldExceedFreeLimit(addingSeries, addingBooks){
+  if(isPremium()) return false;
+  const seriesCount = entries.length + (addingSeries ? 1 : 0);
+  const bookCount = totalBooksTracked() + (addingBooks || 0);
+  return seriesCount > FREE_SERIES_LIMIT || bookCount > FREE_BOOKS_LIMIT;
+}
+async function refreshPremiumStatus(){
+  if(!authUser || !supabaseClient){ if(authUser) authUser.is_premium = false; return; }
+  try{
+    const { data, error } = await supabaseClient
+      .from('profiles')
+      .select('is_premium')
+      .eq('user_id', authUser.id)
+      .single();
+    if(error) throw error;
+    authUser.is_premium = !!(data && data.is_premium);
+  }catch(e){
+    // Column/row not there yet (e.g. before the SQL migration below has
+    // been run) - fail safe to free tier rather than throwing.
+    authUser.is_premium = false;
+  }
+}
+
+async function redeemUnlockCode(){
+  const input = document.getElementById('unlockCodeInput');
+  const errorEl = document.getElementById('unlockCodeError');
+  const btn = document.getElementById('redeemCodeBtn');
+  const code = (input.value || '').trim();
+  if(!code) return;
+  if(code.toUpperCase() !== UNLOCK_CODE.toUpperCase()){
+    errorEl.textContent = "That code doesn't match. Double-check it and try again.";
+    return;
+  }
+  if(!authUser || !supabaseClient){
+    errorEl.textContent = "You need to be signed in for this to save.";
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Unlocking…';
+  try{
+    const { error } = await supabaseClient.from('profiles')
+      .update({ is_premium: true, premium_unlocked_at: new Date().toISOString() })
+      .eq('user_id', authUser.id);
+    if(error) throw error;
+    authUser.is_premium = true;
+    document.getElementById('settingsOverlay').classList.remove('open');
+    renderCollection();
+    if(modalId) renderModal();
+  }catch(e){
+    errorEl.textContent = "Couldn't save that - check the SQL setup notes (profiles needs an update policy).";
+    btn.disabled = false;
+    btn.textContent = 'Redeem';
+  }
+}
+
+function showPaywall(){
+  const overlay = document.getElementById('settingsOverlay');
+  const modal = document.getElementById('settingsModal');
+  let ctaHTML;
+  if(!authUser){
+    ctaHTML = `<p style="color:var(--muted);font-size:13px;">Sign in or create an account first, so your unlock can be tied to it.</p>`;
+  } else {
+    ctaHTML = `
+      <input type="text" id="unlockCodeInput" placeholder="Enter unlock code" style="width:100%;margin-top:10px;" autocapitalize="characters">
+      <p id="unlockCodeError" style="color:var(--red);font-size:12px;min-height:16px;margin:4px 0 0;"></p>
+      <button type="button" class="btn btn-primary" id="redeemCodeBtn" style="display:block;width:100%;margin-top:6px;">Redeem</button>`;
+  }
+  modal.innerHTML = `
+    <button class="modal-close" id="paywallCloseBtn">&times;</button>
+    <div class="name-block"><span class="name">Unlock The Volume Ledger</span></div>
+    <p style="color:var(--muted);font-size:14px;line-height:1.5;">
+      Free tracks up to ${FREE_SERIES_LIMIT} series or ${FREE_BOOKS_LIMIT} books. Unlock once, keep forever:
+    </p>
+    <ul style="font-size:14px;line-height:1.8;color:var(--text);">
+      <li>Unlimited series &amp; volumes</li>
+      <li>Price Tracker &amp; collection value dashboard</li>
+      <li>Custom theme presets (Sakura and more)</li>
+    </ul>
+    ${ctaHTML}`;
+  document.getElementById('paywallCloseBtn').addEventListener('click', ()=>{
+    overlay.classList.remove('open');
+  });
+  const redeemBtn = document.getElementById('redeemCodeBtn');
+  if(redeemBtn) redeemBtn.addEventListener('click', redeemUnlockCode);
+  const codeInput = document.getElementById('unlockCodeInput');
+  if(codeInput) codeInput.addEventListener('keydown', (ev)=>{ if(ev.key === 'Enter') redeemUnlockCode(); });
+  overlay.classList.add('open');
+}
+
+
 
 /* ============================================================
    TUTORIAL DATA
@@ -1591,11 +1741,16 @@ function escapeAttr(s){ return escapeHTML(s); }
 function countsText(e){
   const owned = countOwned(e);
   const ordered = countOrdered(e);
+  const planned = countPlanned(e);
+  let s;
   if(e.status === 'completed'){
-    return `<b>${owned}</b> / ${e.total}`;
+    s = `<b>${owned}</b> / ${e.total}`;
+  } else {
+    s = `<b>${owned}</b> owned`;
+    if(ordered > 0) s += ` <span style="color:var(--blue)">· ${ordered} ordered</span>`;
+    if(planned > 0) s += ` <span style="color:var(--muted)">· ${planned} planned</span>`;
   }
-  let s = `<b>${owned}</b> owned`;
-  if(ordered > 0) s += ` <span style="color:var(--blue)">· ${ordered} ordered</span>`;
+  if(isPremium()) s += ` <span style="color:var(--gold)">· ${formatCurrency(seriesValue(e))}</span>`;
   return s;
 }
 
@@ -1648,7 +1803,11 @@ function renderHeaderStats(){
   if(entries.length === 0){ el.textContent = ''; return; }
   const completedCount = entries.filter(isComplete).length;
   const totalOwned = entries.reduce((sum, e)=> sum + countOwned(e), 0);
-  el.innerHTML = `<b>${entries.length}</b> series · <b>${totalOwned}</b> books · <b>${completedCount}</b> fully owned`;
+  let html = `<b>${entries.length}</b> series · <b>${totalOwned}</b> books · <b>${completedCount}</b> fully owned`;
+  if(isPremium()){
+    html += ` · <b style="color:var(--gold);">${formatCurrency(collectionValue())}</b> value`;
+  }
+  el.innerHTML = html;
 }
 
 function renderCollection(){
@@ -1736,13 +1895,19 @@ function showVolumeMenu(el, entry, idx){
   const isOngoing = entry.status === 'ongoing';
   const menu = document.createElement('div');
   menu.className = 'vol-menu';
+  const priceBtnHTML = isPremium()
+    ? `<button class="vm-price" data-action="price">💰 ${entry.priceOverrides && entry.priceOverrides[idx] != null ? formatCurrency(entry.priceOverrides[idx]) : 'Set price'}</button>`
+    : '';
   menu.innerHTML = isOngoing ? `
     <button class="vm-owned ${current==='owned'?'active':''}" data-status="owned">Owned</button>
     <button class="vm-ordered ${current==='ordered'?'active':''}" data-status="ordered">Ordered</button>
+    <button class="vm-planned ${current==='planned'?'active':''}" data-status="planned">Plan to buy</button>
+    ${priceBtnHTML}
     <button class="vm-missing" data-action="remove">Remove</button>
   ` : `
     <button class="vm-owned ${current==='owned'?'active':''}" data-status="owned">Owned</button>
     <button class="vm-ordered ${current==='ordered'?'active':''}" data-status="ordered">Ordered</button>
+    ${priceBtnHTML}
     <button class="vm-missing ${current==='missing'?'active':''}" data-status="missing">Missing</button>
   `;
   document.body.appendChild(menu);
@@ -1757,6 +1922,22 @@ function showVolumeMenu(el, entry, idx){
   menu.querySelectorAll('button').forEach(btn=>{
     btn.addEventListener('click', async (ev)=>{
       ev.stopPropagation();
+      if(btn.dataset.action === 'price'){
+        closeVolumeMenu();
+        const current = entry.priceOverrides ? entry.priceOverrides[idx] : null;
+        const input = prompt(`Price for volume ${volNum(entry, idx)} (leave blank to use the series default of ${formatCurrency(entry.pricePerVolume||0)}):`,
+          current != null ? current : '');
+        if(input !== null){
+          const val = parseFloat(input.replace(',', '.'));
+          if(!entry.priceOverrides) entry.priceOverrides = {};
+          if(input.trim() === '') delete entry.priceOverrides[idx];
+          else if(isFinite(val) && val >= 0) entry.priceOverrides[idx] = val;
+          await saveEntries();
+          renderModal();
+          renderCollection();
+        }
+        return;
+      }
       if(btn.dataset.action === 'remove'){
         entry.volumes.splice(idx, 1);
       } else {
@@ -1834,6 +2015,9 @@ function detailHTML(e){
         <div class="ef-total-wrap" style="grid-column:1/-1;display:${e.status==='completed'?'block':'none'};">
           <input type="text" class="ef-total" style="width:100%;" value="${e.status==='completed'?e.total:e.volumes.length}" placeholder="Total volumes in series">
         </div>
+        <div class="ef-price-wrap" style="grid-column:1/-1;${isPremium() ? '' : 'display:none;'}">
+          <input type="text" class="ef-price" inputmode="decimal" style="width:100%;" value="${e.pricePerVolume ?? ''}" placeholder="Default price per volume (e.g. 9.99)">
+        </div>
         <div class="ef-ongoing-note" style="grid-column:1/-1;font-size:12px;color:var(--muted);display:${e.status==='ongoing'?'block':'none'};">
           Ongoing series only track volumes you own or have ordered — use the + chip below to add the next one whenever you get it.
         </div>
@@ -1869,11 +2053,16 @@ function detailHTML(e){
       <button class="icon-btn del-btn">✕ Delete</button>
     </div>
     <div class="spines">${spinesHTML(e)}</div>
-    ${e.status==='ongoing' ? '<button class="btn btn-ghost add-volume-btn" style="margin-top:10px;">+ Add volume</button>' : ''}
+    ${e.status==='ongoing' ? `
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn btn-ghost add-volume-btn">+ Add volume</button>
+        <button class="btn btn-ghost add-placeholder-btn">+ Plan to buy</button>
+      </div>` : ''}
     ${e.notes ? `<div class="notes">${escapeHTML(e.notes)}</div>` : ''}
     <div class="legend">
       <span><span class="dot owned"></span> Owned</span>
       <span><span class="dot ordered"></span> Ordered</span>
+      ${e.status==='ongoing' ? '<span><span class="dot planned"></span> Plan to buy</span>' : ''}
       ${e.status==='completed' ? '<span><span class="dot missing"></span> Missing</span>' : ''}
       <span>Tap a spine to set its status</span>
     </div>`;
@@ -1918,6 +2107,7 @@ function renderModal(){
   let addVolumeBusy = false;
   async function addNextVolume(){
     if(addVolumeBusy) return;
+    if(wouldExceedFreeLimit(false, 1)){ showPaywall(); return; }
     addVolumeBusy = true;
     if(addVolBtn) addVolBtn.disabled = true;
     if(addVolChip) addVolChip.style.pointerEvents = 'none';
@@ -1931,6 +2121,19 @@ function renderModal(){
   if(addVolBtn) addVolBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); addNextVolume(); });
   const addVolChip = modal.querySelector('#addVolChip');
   if(addVolChip) addVolChip.addEventListener('click', (ev)=>{ ev.stopPropagation(); addNextVolume(); });
+
+  const addPlaceholderBtn = modal.querySelector('.add-placeholder-btn');
+  if(addPlaceholderBtn) addPlaceholderBtn.addEventListener('click', async (ev)=>{
+    ev.stopPropagation();
+    // Placeholders don't count toward the free-tier book limit - they're
+    // not owned books yet, just a shopping-list marker.
+    entry.volumes.push('planned');
+    await saveEntries();
+    renderModal();
+    renderCollection();
+  });
+
+
 
   const editBtn = modal.querySelector('.edit-btn');
   if(editBtn) editBtn.addEventListener('click', ()=>{ editingInModal = true; renderModal(); });
@@ -1979,6 +2182,11 @@ function renderModal(){
     entry.status = status;
     entry.notes = notes;
     entry.startsAtZero = startsAtZero;
+    if(isPremium()){
+      const priceInput = modal.querySelector('.ef-price');
+      const priceVal = parseFloat((priceInput ? priceInput.value : '').replace(',', '.'));
+      entry.pricePerVolume = isFinite(priceVal) && priceVal > 0 ? priceVal : undefined;
+    }
     if(status === 'completed'){
       const totalInput = modal.querySelector('.ef-total');
       const minTotal = countSecured(entry);
@@ -2104,6 +2312,7 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
     const owned = Math.max(0, parseInt(document.getElementById('new-owned').value)||0);
     const notes = document.getElementById('new-notes').value.trim();
     if(!name){ alert('Series name cannot be empty.'); return; }
+    if(wouldExceedFreeLimit(true, owned)){ showPaywall(); return; }
     let entry;
     if(status === 'completed'){
       const total = Math.max(owned, parseInt(document.getElementById('new-total').value)||owned||1);
@@ -2145,7 +2354,7 @@ const THEME_PRESETS = [
   {name:'Ocean', gold:'#4fb3bf', red:'#2a6f97'},
   {name:'Forest', gold:'#8faa4b', red:'#3f6b3f'},
   {name:'Amethyst', gold:'#b98ce0', red:'#7a3fa0'},
-  {name:'Sakura', gold:'#e8a0bf', red:'#c2447a'},
+  {name:'Sakura', gold:'#e8a0bf', red:'#c2447a', premium:true},
   {name:'Ember', gold:'#e08a3c', red:'#a8321f'},
 ];
 let currentTheme = {gold: THEME_PRESETS[0].gold, red: THEME_PRESETS[0].red};
@@ -2181,6 +2390,15 @@ function renderSettings(){
   const avatarUri = coverCache['__avatar__'];
   modal.innerHTML = `
     <button class="modal-close" id="settingsCloseBtn">&times;</button>
+    ${!isPremium() ? `
+    <div class="name-block" style="margin-bottom:10px;">
+      <span class="name">Premium</span>
+    </div>
+    <button type="button" class="btn btn-primary" id="openPaywallBtn" style="margin-bottom:20px;">Unlock Premium</button>
+    ` : `
+    <div class="name-block" style="margin-bottom:10px;"><span class="name">Premium</span></div>
+    <p style="color:var(--muted);font-size:13px;margin-top:-6px;margin-bottom:20px;">✓ Unlocked — thanks for supporting the app.</p>
+    `}
     <div class="name-block" style="margin-bottom:10px;"><span class="name">Profile</span></div>
     <div class="avatar-row">
       <div class="avatar-preview" style="${avatarUri ? `background-image:url('${avatarUri}');background-size:cover;background-position:center;` : ''}"></div>
@@ -2199,7 +2417,7 @@ function renderSettings(){
             <span class="dot-lg" style="background:${p.gold}"></span>
             <span class="dot-lg" style="background:${p.red}"></span>
           </div>
-          <span class="swatch-label">${p.name}</span>
+          <span class="swatch-label">${p.name}${p.premium && !isPremium() ? ' 🔒' : ''}</span>
         </div>
       `).join('')}
     </div>
@@ -2270,10 +2488,13 @@ function renderSettings(){
   modal.querySelectorAll('.theme-swatch').forEach(sw=>{
     sw.addEventListener('click', async ()=>{
       const preset = THEME_PRESETS[Number(sw.dataset.idx)];
+      if(preset.premium && !isPremium()){ showPaywall(); return; }
       await saveTheme({gold: preset.gold, red: preset.red});
       renderSettings();
     });
   });
+  const openPaywallBtn = document.getElementById('openPaywallBtn');
+  if(openPaywallBtn) openPaywallBtn.addEventListener('click', showPaywall);
   const goldInput = document.getElementById('customGold');
   const redInput = document.getElementById('customRed');
   goldInput.addEventListener('input', ()=>{
@@ -2574,6 +2795,8 @@ async function enterApp(user){
   document.getElementById('tutorialBanner').style.display = 'none';
   document.getElementById('mainApp').style.display = 'block';
   await loadRealCollection();
+  await refreshPremiumStatus();
+  renderCollection();
 }
 
 document.getElementById('exitTutorialBtn').addEventListener('click', ()=>{
