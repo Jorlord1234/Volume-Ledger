@@ -495,6 +495,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .cat-pill.status-completed{border-color:var(--green);color:var(--green);}
 .cat-pill.status-ongoing{border-color:var(--blue);color:var(--blue);}
+.cat-pill.premium-pill{border-color:var(--gold);color:var(--gold);margin-left:4px;}
 .count{
   font-family:'JetBrains Mono',monospace;
   font-size:13px;
@@ -1896,7 +1897,7 @@ function showVolumeMenu(el, entry, idx){
   const menu = document.createElement('div');
   menu.className = 'vol-menu';
   const priceBtnHTML = isPremium()
-    ? `<button class="vm-price" data-action="price">💰 ${entry.priceOverrides && entry.priceOverrides[idx] != null ? formatCurrency(entry.priceOverrides[idx]) : 'Set price'}</button>`
+    ? `<button class="vm-price" data-action="price">${entry.priceOverrides && entry.priceOverrides[idx] != null ? formatCurrency(entry.priceOverrides[idx]) : 'Set price'}</button>`
     : '';
   menu.innerHTML = isOngoing ? `
     <button class="vm-owned ${current==='owned'?'active':''}" data-status="owned">Owned</button>
@@ -2351,11 +2352,11 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
    ============================================================ */
 const THEME_PRESETS = [
   {name:'Ink & Gold (default)', gold:'#c9a227', red:'#b3311f'},
-  {name:'Ocean', gold:'#4fb3bf', red:'#2a6f97'},
-  {name:'Forest', gold:'#8faa4b', red:'#3f6b3f'},
-  {name:'Amethyst', gold:'#b98ce0', red:'#7a3fa0'},
+  {name:'Ocean', gold:'#4fb3bf', red:'#2a6f97', premium:true},
+  {name:'Forest', gold:'#8faa4b', red:'#3f6b3f', premium:true},
+  {name:'Amethyst', gold:'#b98ce0', red:'#7a3fa0', premium:true},
   {name:'Sakura', gold:'#e8a0bf', red:'#c2447a', premium:true},
-  {name:'Ember', gold:'#e08a3c', red:'#a8321f'},
+  {name:'Ember', gold:'#e08a3c', red:'#a8321f', premium:true},
 ];
 let currentTheme = {gold: THEME_PRESETS[0].gold, red: THEME_PRESETS[0].red};
 
@@ -2417,19 +2418,20 @@ function renderSettings(){
             <span class="dot-lg" style="background:${p.gold}"></span>
             <span class="dot-lg" style="background:${p.red}"></span>
           </div>
-          <span class="swatch-label">${p.name}${p.premium && !isPremium() ? ' 🔒' : ''}</span>
+          <span class="swatch-label">${p.name}</span>${p.premium && !isPremium() ? '<span class="cat-pill premium-pill">Premium</span>' : ''}
         </div>
       `).join('')}
     </div>
-    <div class="settings-section-label">Custom colors</div>
+    <div class="settings-section-label">Custom colors ${!isPremium() ? '<span class="cat-pill premium-pill">Premium</span>' : ''}</div>
     <div class="color-input-row">
       <label for="customGold">Primary accent</label>
-      <input type="color" id="customGold" value="${currentTheme.gold}">
+      <input type="color" id="customGold" value="${currentTheme.gold}" ${!isPremium() ? 'disabled' : ''}>
     </div>
     <div class="color-input-row">
       <label for="customRed">Secondary accent</label>
-      <input type="color" id="customRed" value="${currentTheme.red}">
+      <input type="color" id="customRed" value="${currentTheme.red}" ${!isPremium() ? 'disabled' : ''}>
     </div>
+    ${!isPremium() ? '<p class="settings-note">Custom colors and extra theme presets are a premium feature.</p>' : ''}
     <p class="settings-note">This only changes colors on this device. If you share this app's link with anyone, their color choice is separate from yours.</p>
 
     <div class="settings-section-label">Account</div>
