@@ -1332,6 +1332,14 @@ function formatCurrency(n){
    manga coverage is patchy, so it's always shown as a suggestion
    the user can overwrite, never applied silently.
    ============================================================ */
+// This key is meant to be visible in client-side code - it's restricted
+// to only work when called from this site's own domain (HTTP referrer
+// restriction set in Google Cloud Console), so it isn't a secret the way
+// a server-side API key would be. It's what gives this app its own
+// request quota instead of sharing a public pool with every other app
+// that skips authentication entirely.
+const GOOGLE_BOOKS_API_KEY = "AIzaSyAumvCb4y0OitV3sjntp0B7LMqVU3j5nzI";
+
 // Shared across both lookup functions - once Google Books rate-limits us,
 // every button that would call it (Look up price, auto-lookup, both
 // barcode scan paths, Fill missing prices) backs off for a bit instead of
@@ -1355,7 +1363,7 @@ function noteGoogleBooksRateLimited(){
 
 async function fetchGoogleBooksPrice(title){
   checkGoogleBooksBackoff();
-  const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent('intitle:' + title)}&maxResults=5`);
+  const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent('intitle:' + title)}&maxResults=5&key=${GOOGLE_BOOKS_API_KEY}`);
   if(res.status === 429 || res.status === 403){
     noteGoogleBooksRateLimited();
     const err = new Error('Google Books is temporarily rate-limiting this app - try again in a bit.');
@@ -1412,7 +1420,7 @@ async function fillMissingPrices(btn){
 // guessing at a title match.
 async function fetchGoogleBooksByIsbn(isbn){
   checkGoogleBooksBackoff();
-  const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent('isbn:' + isbn)}`);
+  const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent('isbn:' + isbn)}&key=${GOOGLE_BOOKS_API_KEY}`);
   if(res.status === 429 || res.status === 403){
     noteGoogleBooksRateLimited();
     const err = new Error('Google Books is temporarily rate-limiting this app - try again in a bit.');
