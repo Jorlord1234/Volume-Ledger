@@ -482,6 +482,10 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .milestone-toast.show{opacity:1;transform:translate(-50%, 0);}
 .milestone-star{color:var(--gold);margin-right:4px;}
+.milestones-list{margin-bottom:20px;max-height:220px;overflow-y:auto;}
+.milestone-row{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;color:var(--muted);opacity:0.5;}
+.milestone-row.achieved{color:var(--text);opacity:1;}
+.milestone-row-star{color:var(--gold);width:16px;text-align:center;}
 
 .private-check{
   display:flex;
@@ -1342,6 +1346,26 @@ async function fetchGoogleBooksPrice(title){
   return null;
 }
 
+async function fillMissingPrices(btn){
+  const missing = entries.filter(e => e.pricePerVolume == null);
+  if(missing.length === 0){ alert('Every series already has a price set.'); return; }
+  let filled = 0;
+  for(let i=0;i<missing.length;i++){
+    const e = missing[i];
+    if(btn) btn.textContent = `Looking up… (${i+1}/${missing.length})`;
+    try{
+      const result = await fetchGoogleBooksPrice(e.name);
+      if(result){ e.pricePerVolume = result.amount; filled++; }
+    }catch(err){ /* skip this one, keep going with the rest */ }
+    await new Promise(r => setTimeout(r, 300)); // be polite to the free, unauthenticated API
+  }
+  await saveEntries();
+  renderCollection();
+  if(modalId) renderModal();
+  if(btn) btn.textContent = 'Fill missing prices';
+  alert(`Filled prices for ${filled} of ${missing.length} series that didn't have one. The rest had no match on Google Books - you can add those manually if you want.`);
+}
+
 // Barcode scans give an ISBN/UPC, which is a much more precise lookup key
 // than a typed title - it identifies the exact printed edition rather than
 // guessing at a title match.
@@ -1368,14 +1392,22 @@ async function fetchGoogleBooksByIsbn(isbn){
 let activeScanner = null;
 
 function closeBarcodeScanner(){
+  // Remove the popup FIRST, unconditionally - stopping the camera can
+  // fail or throw (e.g. if it's called before the camera finished
+  // starting up), and that used to prevent the popup from closing at all.
   const overlay = document.getElementById('barcodeScanOverlay');
-  if(activeScanner){
-    activeScanner.stop().catch(()=>{}).finally(()=>{
-      activeScanner.clear();
-      activeScanner = null;
-    });
-  }
   if(overlay) overlay.remove();
+  const scanner = activeScanner;
+  activeScanner = null;
+  if(scanner){
+    try{
+      scanner.stop().catch(()=>{}).finally(()=>{
+        try{ scanner.clear(); }catch(e){ /* already cleared/never started */ }
+      });
+    }catch(e){
+      try{ scanner.clear(); }catch(e2){ /* already cleared/never started */ }
+    }
+  }
 }
 
 function showBarcodeScanner(onResult){
@@ -1516,6 +1548,41 @@ function wouldExceedFreeLimit(addingSeries, addingBooks){
   const bookCount = totalBooksTracked() + (addingBooks || 0);
   return seriesCount > FREE_SERIES_LIMIT || bookCount > FREE_BOOKS_LIMIT;
 }
+async function pushCloudPreference(key, value){
+  if(!authUser || !supabaseClient) return; // stays local-only until signed in / online
+  try{
+    const { data } = await supabaseClient.from('profiles').select('preferences').eq('user_id', authUser.id).single();
+    const merged = Object.assign({}, (data && data.preferences) || {}, { [key]: value });
+    await supabaseClient.from('profiles').update({ preferences: merged }).eq('user_id', authUser.id);
+  }catch(e){
+    // Column not there yet (setup SQL not run), or offline - not critical,
+    // this device's own copy stays correct either way.
+  }
+}
+
+async function loadCloudPreferences(){
+  if(!authUser || !supabaseClient) return;
+  try{
+    const { data, error } = await supabaseClient.from('profiles').select('preferences').eq('user_id', authUser.id).single();
+    if(error) throw error;
+    const prefs = (data && data.preferences) || {};
+    if(prefs.theme && prefs.theme.gold && prefs.theme.red){
+      applyTheme(prefs.theme);
+      await Storage.set('theme', JSON.stringify(prefs.theme), false);
+    }
+    if(prefs.currency && CURRENCIES.some(c => c.code === prefs.currency)){
+      currentCurrency = prefs.currency;
+      await Storage.set('currency', currentCurrency, false);
+    }
+    if(Array.isArray(prefs.milestonesSeen)){
+      await Storage.set('milestones_seen', JSON.stringify(prefs.milestonesSeen), false);
+    }
+  }catch(e){
+    // Setup SQL not run yet, or offline - just keep whatever's on this
+    // device already, same as before this feature existed.
+  }
+}
+
 async function refreshPremiumStatus(){
   if(!authUser || !supabaseClient){ if(authUser) authUser.is_premium = false; return; }
   try{
@@ -1809,6 +1876,21 @@ const MILESTONES = [
   {id:'completed_10', check: s => s.completedCount >= 10,  label:'10 series completed!'},
 ];
 
+function milestonesListHTML(){
+  const stats = {
+    totalBooks: entries.reduce((sum,e)=> sum + countOwned(e), 0),
+    seriesCount: entries.length,
+    completedCount: entries.filter(isComplete).length
+  };
+  return MILESTONES.map(m => {
+    const achieved = m.check(stats);
+    return `<div class="milestone-row ${achieved ? 'achieved' : ''}">
+      <span class="milestone-row-star">${achieved ? '★' : '☆'}</span>
+      <span>${escapeHTML(m.label)}</span>
+    </div>`;
+  }).join('');
+}
+
 let milestoneToastQueue = [];
 let milestoneToastShowing = false;
 
@@ -1861,6 +1943,7 @@ async function checkMilestones(){
 
   seen = seen.concat(newlyReached.map(m => m.id));
   try{ await Storage.set('milestones_seen', JSON.stringify(seen), false); }catch(e){ /* not critical - worst case it shows again next time */ }
+  pushCloudPreference('milestonesSeen', seen);
 
   newlyReached.forEach(m => milestoneToastQueue.push(m.label));
   showNextMilestoneToast();
@@ -1934,7 +2017,7 @@ function tileHTML(e){
   return `
   <div class="tile" style="${bgStyle}" data-id="${e.id}">
     ${complete ? '<span class="tile-seal">✓</span>' : ''}
-    ${e.favorite ? '<span class="tile-favorite">★</span>' : ''}
+    ${e.favorite ? '<span class="tile-favorite">♥</span>' : ''}
     ${pct!==null ? `<span class="tile-progress" style="width:${pct}%;"></span>` : ''}
     <div class="tile-title">${escapeHTML(e.name)}</div>
   </div>`;
@@ -1962,7 +2045,7 @@ function listRowHTML(e){
   <div class="list-row" data-id="${e.id}">
     <div class="list-row-top">
       <div class="list-cover" style="${bgStyle}"></div>
-      <div class="list-name">${e.favorite ? '<span style="color:var(--gold);">★</span> ' : ''}${escapeHTML(e.name)}</div>
+      <div class="list-name">${e.favorite ? '<span style="color:var(--gold);">♥</span> ' : ''}${escapeHTML(e.name)}</div>
       ${e.rating ? `<span class="list-rating">${starRatingHTML(e.rating)}</span>` : ''}
       <span class="list-stats">${countsText(e)}</span>
       <span class="cat-pill list-status-pill status-${e.status}">${e.status==='completed'?'Fully published':'Ongoing'}</span>
@@ -2255,7 +2338,7 @@ function detailHTML(e){
         <span class="name">${escapeHTML(e.name)}</span>
         <span class="cat-pill status-${e.status}">${e.status==='completed'?'Fully published':'Ongoing'}</span>
         ${complete ? '<span class="seal" title="Complete">✓</span>' : ''}
-        <button class="favorite-btn ${e.favorite?'active':''}" id="favoriteBtn" title="${e.favorite?'Remove from favorites':'Add to favorites'}">${e.favorite?'★':'☆'}</button>
+        <button class="favorite-btn ${e.favorite?'active':''}" id="favoriteBtn" title="${e.favorite?'Remove from favorites':'Add to favorites'}">${e.favorite?'♥':'♡'}</button>
       </div>
       <span class="count">${countsText(e)}</span>
       <div class="rating-picker" id="ratingPicker" data-value="${e.rating||0}" title="Your rating">
@@ -2838,6 +2921,7 @@ async function loadTheme(){
 async function saveTheme(theme){
   applyTheme(theme);
   try{ await Storage.set('theme', JSON.stringify(theme), false); }catch(e){ /* stays applied for this session at least */ }
+  pushCloudPreference('theme', theme);
 }
 
 function isPresetActive(preset){
@@ -2867,6 +2951,7 @@ async function loadCurrency(){
 async function saveCurrency(code){
   currentCurrency = code;
   try{ await Storage.set('currency', code, false); }catch(e){ /* stays applied for this session at least */ }
+  pushCloudPreference('currency', code);
 }
 
 function renderSettings(){
@@ -2881,7 +2966,9 @@ function renderSettings(){
     <button type="button" class="btn btn-primary" id="openPaywallBtn" style="margin-bottom:20px;">Unlock Premium</button>
     ` : `
     <div class="name-block" style="margin-bottom:10px;"><span class="name">Premium</span></div>
-    <p style="color:var(--muted);font-size:13px;margin-top:-6px;margin-bottom:20px;">✓ Unlocked — thanks for supporting the app.</p>
+    <p style="color:var(--muted);font-size:13px;margin-top:-6px;margin-bottom:12px;">✓ Unlocked — thanks for supporting the app.</p>
+    <button type="button" class="btn btn-ghost" id="fillPricesBtn" style="margin-bottom:20px;">Fill missing prices</button>
+    <p class="settings-note" style="margin-top:-16px;margin-bottom:20px;">Looks up a price for every series that doesn't have one yet, using the same Google Books lookup as "Look up price" - only fills blanks, never overwrites a price you already set.</p>
     `}
     <div class="name-block" style="margin-bottom:10px;margin-top:20px;"><span class="name">Profile</span></div>
     <div class="avatar-row">
@@ -2914,6 +3001,8 @@ function renderSettings(){
       `).join('')}
     </div>
     <p class="settings-note">Used for the Price Tracker and collection value. This only changes the display on this device.</p>
+    <div class="settings-section-label">Milestones</div>
+    <div class="milestones-list">${milestonesListHTML()}</div>
     ${isPremium() ? `
     <div class="settings-section-label">Custom colors</div>
     <div class="color-input-row">
@@ -2990,6 +3079,13 @@ function renderSettings(){
   });
   const openPaywallBtn = document.getElementById('openPaywallBtn');
   if(openPaywallBtn) openPaywallBtn.addEventListener('click', showPaywall);
+
+  const fillPricesBtn = document.getElementById('fillPricesBtn');
+  if(fillPricesBtn) fillPricesBtn.addEventListener('click', async ()=>{
+    fillPricesBtn.disabled = true;
+    await fillMissingPrices(fillPricesBtn);
+    fillPricesBtn.disabled = false;
+  });
 
   document.querySelectorAll('#currencyGrid .theme-swatch').forEach(sw=>{
     sw.addEventListener('click', async ()=>{
@@ -3300,6 +3396,7 @@ async function enterApp(user){
   document.getElementById('mainApp').style.display = 'block';
   await loadRealCollection();
   await refreshPremiumStatus();
+  await loadCloudPreferences();
   renderCollection();
   checkMilestones();
 }
