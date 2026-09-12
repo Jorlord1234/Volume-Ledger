@@ -1332,9 +1332,37 @@ function formatCurrency(n){
    manga coverage is patchy, so it's always shown as a suggestion
    the user can overwrite, never applied silently.
    ============================================================ */
+// Shared across both lookup functions - once Google Books rate-limits us,
+// every button that would call it (Look up price, auto-lookup, both
+// barcode scan paths, Fill missing prices) backs off for a bit instead of
+// immediately trying again, since repeatedly retrying during an active
+// rate-limit is exactly the kind of thing that keeps it from clearing.
+let googleBooksBlockedUntil = 0;
+const GOOGLE_BOOKS_BACKOFF_MS = 60000; // 1 minute
+
+function checkGoogleBooksBackoff(){
+  const remaining = googleBooksBlockedUntil - Date.now();
+  if(remaining > 0){
+    const err = new Error(`Google Books is rate-limited right now - try again in about ${Math.ceil(remaining/1000)}s.`);
+    err.rateLimited = true;
+    throw err;
+  }
+}
+
+function noteGoogleBooksRateLimited(){
+  googleBooksBlockedUntil = Date.now() + GOOGLE_BOOKS_BACKOFF_MS;
+}
+
 async function fetchGoogleBooksPrice(title){
+  checkGoogleBooksBackoff();
   const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent('intitle:' + title)}&maxResults=5`);
-  if(!res.ok) throw new Error('Google Books lookup failed');
+  if(res.status === 429 || res.status === 403){
+    noteGoogleBooksRateLimited();
+    const err = new Error('Google Books is temporarily rate-limiting this app - try again in a bit.');
+    err.rateLimited = true;
+    throw err;
+  }
+  if(!res.ok) throw new Error(`Google Books lookup failed (status ${res.status})`);
   const json = await res.json();
   const items = (json && json.items) || [];
   for(const item of items){
@@ -1350,28 +1378,48 @@ async function fillMissingPrices(btn){
   const missing = entries.filter(e => e.pricePerVolume == null);
   if(missing.length === 0){ alert('Every series already has a price set.'); return; }
   let filled = 0;
+  let stoppedEarly = false;
   for(let i=0;i<missing.length;i++){
     const e = missing[i];
     if(btn) btn.textContent = `Looking up… (${i+1}/${missing.length})`;
     try{
       const result = await fetchGoogleBooksPrice(e.name);
       if(result){ e.pricePerVolume = result.amount; filled++; }
-    }catch(err){ /* skip this one, keep going with the rest */ }
-    await new Promise(r => setTimeout(r, 300)); // be polite to the free, unauthenticated API
+    }catch(err){
+      if(err.rateLimited){
+        // No point burning through the rest of the list once we're
+        // rate-limited - they'd all fail the same way.
+        stoppedEarly = true;
+        break;
+      }
+      // Some other one-off failure - skip this one, keep going with the rest.
+    }
+    await new Promise(r => setTimeout(r, 1500)); // slower pace, less likely to trip the limit again
   }
   await saveEntries();
   renderCollection();
   if(modalId) renderModal();
   if(btn) btn.textContent = 'Fill missing prices';
-  alert(`Filled prices for ${filled} of ${missing.length} series that didn't have one. The rest had no match on Google Books - you can add those manually if you want.`);
+  if(stoppedEarly){
+    alert(`Filled ${filled} series before Google Books started rate-limiting requests. Wait a while and run "Fill missing prices" again to pick up where it left off - it only fills blanks, so nothing gets overwritten.`);
+  } else {
+    alert(`Filled prices for ${filled} of ${missing.length} series that didn't have one. The rest had no match on Google Books - you can add those manually if you want.`);
+  }
 }
 
 // Barcode scans give an ISBN/UPC, which is a much more precise lookup key
 // than a typed title - it identifies the exact printed edition rather than
 // guessing at a title match.
 async function fetchGoogleBooksByIsbn(isbn){
+  checkGoogleBooksBackoff();
   const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent('isbn:' + isbn)}`);
-  if(!res.ok) throw new Error('Google Books lookup failed');
+  if(res.status === 429 || res.status === 403){
+    noteGoogleBooksRateLimited();
+    const err = new Error('Google Books is temporarily rate-limiting this app - try again in a bit.');
+    err.rateLimited = true;
+    throw err;
+  }
+  if(!res.ok) throw new Error(`Google Books lookup failed (status ${res.status})`);
   const json = await res.json();
   const item = json && json.items && json.items[0];
   if(!item) return null;
@@ -2450,7 +2498,7 @@ function renderModal(){
         noteEl.textContent = `Suggested from Google Books (${result.currencyCode}) - a publisher list price, not a rare/resale value. Check it before saving.`;
       }
     }catch(err){
-      noteEl.textContent = "Couldn't reach Google Books - check your connection and try again.";
+      noteEl.textContent = err.rateLimited ? err.message : "Couldn't reach Google Books - check your connection and try again.";
     }finally{
       priceLookupBtn.textContent = 'Look up price';
       priceLookupBtn.disabled = false;
@@ -2670,7 +2718,7 @@ function openAddSeriesForm(prefill){
         newPriceNote.textContent = 'No list price found - enter one manually if you want.';
       }
     }catch(err){
-      newPriceNote.textContent = "Couldn't reach Google Books - enter a price manually if you want.";
+      newPriceNote.textContent = err.rateLimited ? err.message : "Couldn't reach Google Books - enter a price manually if you want.";
     }
   }
   newNameInput.addEventListener('blur', autoLookupPrice);
@@ -2695,7 +2743,7 @@ function openAddSeriesForm(prefill){
         }
       }catch(err){
         newNameInput.value = '';
-        alert("Couldn't look up that barcode - check your connection and try again.");
+        alert(err.rateLimited ? err.message : "Couldn't look up that barcode - check your connection and try again.");
       }
     });
   });
@@ -2848,7 +2896,7 @@ document.getElementById('quickScanBtn').addEventListener('click', ()=>{
     try{
       result = await fetchGoogleBooksByIsbn(code);
     }catch(err){
-      alert("Couldn't look up that barcode - check your connection and try again.");
+      alert(err.rateLimited ? err.message : "Couldn't look up that barcode - check your connection and try again.");
       return;
     }
     if(!result || !result.title){
