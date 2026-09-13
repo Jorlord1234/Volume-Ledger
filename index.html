@@ -2537,6 +2537,7 @@ document.getElementById('quickScanBtn').addEventListener('click', ()=>{
       alert(`No book found for barcode ${code}. Try adding it manually instead.`);
       return;
     }
+    const cleanedTitle = stripVolumeSuffixForDisplay(result.title);
     const match = findMatchingSeries(result.title);
     if(match){
       const addVolume = await showConfirmDialog(
@@ -2554,8 +2555,12 @@ document.getElementById('quickScanBtn').addEventListener('click', ()=>{
       // Declined - user says this is actually a different/new series
       // despite the name similarity, so fall through to adding it fresh.
     }
+    const useTitle = await showConfirmDialog(
+      `Found "${cleanedTitle}" from the barcode. Use this as the series name?`,
+      'Use this name'
+    );
     openAddSeriesForm({
-      name: result.title,
+      name: useTitle ? cleanedTitle : '',
       price: result.amount != null ? result.amount : null,
       priceNote: result.amount != null ? `Suggested from Google Books (${result.currencyCode}) - manga is often missing or wrong here, so double-check this before saving.` : ''
     });
@@ -2575,6 +2580,16 @@ function normalizeSeriesTitle(title){
     // so "Chainsaw Man, Vol. 12" and "Chainsaw Man" compare as the same series.
     .replace(/,?\s*(vol(ume)?\.?\s*\d+|#\d+|\(\s*\d+\s*\)|\bbook\s*\d+)\s*$/i, '')
     .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+// Same volume-suffix stripping as normalizeSeriesTitle, but keeps real
+// casing/punctuation intact - normalizeSeriesTitle is for comparing two
+// titles, not for something you'd actually want to see as a series name
+// (it lowercases everything and strips punctuation).
+function stripVolumeSuffixForDisplay(title){
+  return (title || '')
+    .replace(/,?\s*(vol(ume)?\.?\s*\d+|#\d+|\(\s*\d+\s*\)|\bbook\s*\d+)\s*$/i, '')
     .trim();
 }
 
@@ -2685,16 +2700,24 @@ function showBarcodeScanner(onResult){
   activeScanner = new Html5Qrcode('barcodeReaderRegion');
   const config = {
     fps: 10,
-    qrbox: { width: 250, height: 120 },
+    qrbox: { width: 280, height: 140 },
     formatsToSupport: [
       Html5QrcodeSupportedFormats.EAN_13,
       Html5QrcodeSupportedFormats.EAN_8,
       Html5QrcodeSupportedFormats.UPC_A,
       Html5QrcodeSupportedFormats.CODE_128
-    ]
+    ],
+    // On Android Chrome this hands decoding to the phone's own faster,
+    // more accurate barcode reader when available - iOS still falls back
+    // to the built-in JS decoder either way, so this is purely additive.
+    experimentalFeatures: { useBarCodeDetectorIfSupported: true }
   };
   activeScanner.start(
-    { facingMode: 'environment' },
+    // A specific resolution request, not just "environment" - fine
+    // barcode lines need more detail than a QR code does, and without
+    // this the camera can default to a lower-res stream that's too
+    // blurry to read at the distance where the barcode isn't distorted.
+    { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] },
     config,
     (decodedText)=>{
       closeBarcodeScanner();
