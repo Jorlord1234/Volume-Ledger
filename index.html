@@ -907,6 +907,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 .settings-note{font-size:12px;color:var(--muted);margin-top:14px;line-height:1.5;}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script>
   // ============================================================
   // FILL THESE TWO IN before hosting the app.
@@ -989,6 +990,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
     <button class="btn btn-ghost" id="settingsBtn" title="Theme settings" aria-label="Theme settings">
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </button>
+    <button class="btn btn-ghost" id="quickScanBtn" title="Scan a book's barcode">Scan</button>
     <button class="btn btn-primary" id="showAddBtn">+ Add series</button>
   </div>
 
@@ -2450,6 +2452,7 @@ function openAddSeriesForm(prefill){
       ${isPremium() ? `
       <div style="grid-column:1/-1;">
         <input type="text" id="new-price" inputmode="decimal" style="width:100%;" placeholder="Default price per volume - what you paid" value="${prefill && prefill.price != null ? prefill.price : ''}">
+        <p class="settings-note" style="margin:4px 0 0;min-height:14px;">${prefill && prefill.priceNote ? prefill.priceNote : ''}</p>
       </div>
       ` : ''}
       <textarea id="new-notes" placeholder="Notes (optional)"></textarea>
@@ -2521,6 +2524,44 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
   openAddSeriesForm();
 });
 
+document.getElementById('quickScanBtn').addEventListener('click', ()=>{
+  showBarcodeScanner(async (code)=>{
+    let result;
+    try{
+      result = await fetchGoogleBooksByIsbn(code);
+    }catch(err){
+      alert(err.rateLimited ? err.message : "Couldn't look up that barcode - check your connection and try again.");
+      return;
+    }
+    if(!result || !result.title){
+      alert(`No book found for barcode ${code}. Try adding it manually instead.`);
+      return;
+    }
+    const match = findMatchingSeries(result.title);
+    if(match){
+      const addVolume = await showConfirmDialog(
+        `This looks like a volume of "${match.name}", which is already in your ledger. Add a volume to it?`,
+        'Add volume'
+      );
+      if(addVolume){
+        if(wouldExceedFreeLimit(false, 1)){ showPaywall(); return; }
+        match.volumes.push('owned');
+        await saveEntries();
+        renderCollection();
+        showQuickToast(`Added to ${match.name}`);
+        return;
+      }
+      // Declined - user says this is actually a different/new series
+      // despite the name similarity, so fall through to adding it fresh.
+    }
+    openAddSeriesForm({
+      name: result.title,
+      price: result.amount != null ? result.amount : null,
+      priceNote: result.amount != null ? `Suggested from Google Books (${result.currencyCode}) - manga is often missing or wrong here, so double-check this before saving.` : ''
+    });
+  });
+});
+
 /* ============================================================
    SERIES TITLE MATCHING
    Used to key community ratings so slightly different naming (e.g.
@@ -2535,6 +2576,147 @@ function normalizeSeriesTitle(title){
     .replace(/,?\s*(vol(ume)?\.?\s*\d+|#\d+|\(\s*\d+\s*\)|\bbook\s*\d+)\s*$/i, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
+}
+
+function findMatchingSeries(scannedTitle){
+  const normalizedScan = normalizeSeriesTitle(scannedTitle);
+  if(!normalizedScan) return null;
+  return entries.find(e => {
+    const normalizedEntry = normalizeSeriesTitle(e.name);
+    return normalizedEntry === normalizedScan
+      || normalizedEntry.includes(normalizedScan)
+      || normalizedScan.includes(normalizedEntry);
+  }) || null;
+}
+
+/* ============================================================
+   BARCODE SCAN LOOKUP
+   ISBN-based lookup only (never the fuzzy title-text search that
+   previously matched an unrelated book) - scanning gives an exact
+   ISBN, which identifies the exact printed edition rather than
+   guessing at a title match. Price is included when Google Books
+   happens to have it, but real-world testing on manga showed this
+   is present far less often than for regular novels/nonfiction
+   (manga is rarely sold through Google Play Books, which is what
+   populates the price field) - so it's always shown as a check-it
+   suggestion, never applied silently.
+   ============================================================ */
+const GOOGLE_BOOKS_API_KEY = "AIzaSyDgCA49Y7jWZWGlM7sIRsKUsNalV35KfcU";
+
+let googleBooksBlockedUntil = 0;
+const GOOGLE_BOOKS_BACKOFF_MS = 60000; // 1 minute
+
+function checkGoogleBooksBackoff(){
+  const remaining = googleBooksBlockedUntil - Date.now();
+  if(remaining > 0){
+    const err = new Error(`Google Books is rate-limited right now - try again in about ${Math.ceil(remaining/1000)}s.`);
+    err.rateLimited = true;
+    throw err;
+  }
+}
+
+function noteGoogleBooksRateLimited(){
+  googleBooksBlockedUntil = Date.now() + GOOGLE_BOOKS_BACKOFF_MS;
+}
+
+async function fetchGoogleBooksByIsbn(isbn){
+  checkGoogleBooksBackoff();
+  const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent('isbn:' + isbn)}&key=${GOOGLE_BOOKS_API_KEY}`);
+  if(res.status === 429 || res.status === 403){
+    noteGoogleBooksRateLimited();
+    const err = new Error('Google Books is temporarily rate-limiting this app - try again in a bit.');
+    err.rateLimited = true;
+    throw err;
+  }
+  if(!res.ok) throw new Error(`Google Books lookup failed (status ${res.status})`);
+  const json = await res.json();
+  const item = json && json.items && json.items[0];
+  if(!item) return null;
+  const price = item.saleInfo && item.saleInfo.listPrice;
+  return {
+    title: item.volumeInfo && item.volumeInfo.title,
+    amount: price ? price.amount : null,
+    currencyCode: price ? price.currencyCode : null
+  };
+}
+
+let activeScanner = null;
+
+function closeBarcodeScanner(){
+  // Remove the popup FIRST, unconditionally - stopping the camera can
+  // fail or throw (e.g. if called before the camera finished starting),
+  // and that used to prevent the popup from closing at all.
+  const overlay = document.getElementById('barcodeScanOverlay');
+  if(overlay) overlay.remove();
+  const scanner = activeScanner;
+  activeScanner = null;
+  if(scanner){
+    try{
+      scanner.stop().catch(()=>{}).finally(()=>{
+        try{ scanner.clear(); }catch(e){ /* already cleared/never started */ }
+      });
+    }catch(e){
+      try{ scanner.clear(); }catch(e2){ /* already cleared/never started */ }
+    }
+  }
+}
+
+function showBarcodeScanner(onResult){
+  closeBarcodeScanner();
+  if(typeof Html5Qrcode === 'undefined'){
+    alert("The barcode scanner didn't load - check your connection and try again, or add the series manually.");
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.id = 'barcodeScanOverlay';
+  overlay.className = 'overlay open';
+  overlay.style.zIndex = '1100';
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:380px;padding:20px;">
+      <button type="button" class="modal-close" id="barcodeScanClose">&times;</button>
+      <div class="name-block" style="margin-bottom:10px;"><span class="name">Scan a barcode</span></div>
+      <p class="settings-note" style="margin:0 0 10px;">Point your camera at the barcode on the back of the book.</p>
+      <div id="barcodeReaderRegion" style="width:100%;border-radius:8px;overflow:hidden;"></div>
+      <p id="barcodeScanError" style="color:var(--red);font-size:12px;min-height:16px;margin-top:8px;"></p>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('barcodeScanClose').addEventListener('click', closeBarcodeScanner);
+
+  activeScanner = new Html5Qrcode('barcodeReaderRegion');
+  const config = {
+    fps: 10,
+    qrbox: { width: 250, height: 120 },
+    formatsToSupport: [
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.EAN_8,
+      Html5QrcodeSupportedFormats.UPC_A,
+      Html5QrcodeSupportedFormats.CODE_128
+    ]
+  };
+  activeScanner.start(
+    { facingMode: 'environment' },
+    config,
+    (decodedText)=>{
+      closeBarcodeScanner();
+      onResult(decodedText);
+    },
+    ()=>{ /* per-frame "no barcode found yet" - expected constantly while aiming, ignore */ }
+  ).catch((err)=>{
+    const errorEl = document.getElementById('barcodeScanError');
+    if(errorEl) errorEl.textContent = "Couldn't access the camera - check your browser's camera permission for this site.";
+  });
+}
+
+function showQuickToast(message){
+  const el = document.createElement('div');
+  el.className = 'milestone-toast';
+  el.textContent = message;
+  document.body.appendChild(el);
+  requestAnimationFrame(()=> el.classList.add('show'));
+  setTimeout(()=>{
+    el.classList.remove('show');
+    setTimeout(()=> el.remove(), 300);
+  }, 2200);
 }
 
 /* ============================================================
