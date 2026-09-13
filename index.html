@@ -907,7 +907,6 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 .settings-note{font-size:12px;color:var(--muted);margin-top:14px;line-height:1.5;}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script>
   // ============================================================
   // FILL THESE TWO IN before hosting the app.
@@ -990,7 +989,6 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
     <button class="btn btn-ghost" id="settingsBtn" title="Theme settings" aria-label="Theme settings">
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </button>
-    <button class="btn btn-ghost" id="quickScanBtn" title="Scan a book's barcode">Scan</button>
     <button class="btn btn-primary" id="showAddBtn">+ Add series</button>
   </div>
 
@@ -1322,197 +1320,6 @@ function formatCurrency(n){
   const c = CURRENCIES.find(c => c.code === currentCurrency) || CURRENCIES[0];
   return new Intl.NumberFormat(c.locale, {style:'currency', currency:c.code}).format(n || 0);
 }
-
-/* ============================================================
-   PRICE LOOKUP (Google Books)
-   Best-effort auto-fill for "Default price per volume" - pulls a
-   publisher list price where Google Books happens to have one.
-   This is NOT a resale/collector market price (there's no free API
-   for that, unlike dedicated trading-card price trackers) and
-   manga coverage is patchy, so it's always shown as a suggestion
-   the user can overwrite, never applied silently.
-   ============================================================ */
-// This key is meant to be visible in client-side code - it's restricted
-// to only work when called from this site's own domain (HTTP referrer
-// restriction set in Google Cloud Console), so it isn't a secret the way
-// a server-side API key would be. It's what gives this app its own
-// request quota instead of sharing a public pool with every other app
-// that skips authentication entirely.
-const GOOGLE_BOOKS_API_KEY = "AIzaSyAumvCb4y0OitV3sjntp0B7LMqVU3j5nzI";
-
-// Shared across both lookup functions - once Google Books rate-limits us,
-// every button that would call it (Look up price, auto-lookup, both
-// barcode scan paths, Fill missing prices) backs off for a bit instead of
-// immediately trying again, since repeatedly retrying during an active
-// rate-limit is exactly the kind of thing that keeps it from clearing.
-let googleBooksBlockedUntil = 0;
-const GOOGLE_BOOKS_BACKOFF_MS = 60000; // 1 minute
-
-function checkGoogleBooksBackoff(){
-  const remaining = googleBooksBlockedUntil - Date.now();
-  if(remaining > 0){
-    const err = new Error(`Google Books is rate-limited right now - try again in about ${Math.ceil(remaining/1000)}s.`);
-    err.rateLimited = true;
-    throw err;
-  }
-}
-
-function noteGoogleBooksRateLimited(){
-  googleBooksBlockedUntil = Date.now() + GOOGLE_BOOKS_BACKOFF_MS;
-}
-
-async function fetchGoogleBooksPrice(title){
-  checkGoogleBooksBackoff();
-  const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent('intitle:' + title)}&maxResults=5&key=${GOOGLE_BOOKS_API_KEY}`);
-  if(res.status === 429 || res.status === 403){
-    noteGoogleBooksRateLimited();
-    const err = new Error('Google Books is temporarily rate-limiting this app - try again in a bit.');
-    err.rateLimited = true;
-    throw err;
-  }
-  if(!res.ok) throw new Error(`Google Books lookup failed (status ${res.status})`);
-  const json = await res.json();
-  const items = (json && json.items) || [];
-  for(const item of items){
-    const price = item.saleInfo && item.saleInfo.listPrice;
-    if(price && price.amount){
-      return { amount: price.amount, currencyCode: price.currencyCode, matchedTitle: item.volumeInfo && item.volumeInfo.title };
-    }
-  }
-  return null;
-}
-
-async function fillMissingPrices(btn){
-  const missing = entries.filter(e => e.pricePerVolume == null);
-  if(missing.length === 0){ alert('Every series already has a price set.'); return; }
-  let filled = 0;
-  let stoppedEarly = false;
-  for(let i=0;i<missing.length;i++){
-    const e = missing[i];
-    if(btn) btn.textContent = `Looking up… (${i+1}/${missing.length})`;
-    try{
-      const result = await fetchGoogleBooksPrice(e.name);
-      if(result){ e.pricePerVolume = result.amount; filled++; }
-    }catch(err){
-      if(err.rateLimited){
-        // No point burning through the rest of the list once we're
-        // rate-limited - they'd all fail the same way.
-        stoppedEarly = true;
-        break;
-      }
-      // Some other one-off failure - skip this one, keep going with the rest.
-    }
-    await new Promise(r => setTimeout(r, 1500)); // slower pace, less likely to trip the limit again
-  }
-  await saveEntries();
-  renderCollection();
-  if(modalId) renderModal();
-  if(btn) btn.textContent = 'Fill missing prices';
-  if(stoppedEarly){
-    alert(`Filled ${filled} series before Google Books started rate-limiting requests. Wait a while and run "Fill missing prices" again to pick up where it left off - it only fills blanks, so nothing gets overwritten.`);
-  } else {
-    alert(`Filled prices for ${filled} of ${missing.length} series that didn't have one. The rest had no match on Google Books - you can add those manually if you want.`);
-  }
-}
-
-// Barcode scans give an ISBN/UPC, which is a much more precise lookup key
-// than a typed title - it identifies the exact printed edition rather than
-// guessing at a title match.
-async function fetchGoogleBooksByIsbn(isbn){
-  checkGoogleBooksBackoff();
-  const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent('isbn:' + isbn)}&key=${GOOGLE_BOOKS_API_KEY}`);
-  if(res.status === 429 || res.status === 403){
-    noteGoogleBooksRateLimited();
-    const err = new Error('Google Books is temporarily rate-limiting this app - try again in a bit.');
-    err.rateLimited = true;
-    throw err;
-  }
-  if(!res.ok) throw new Error(`Google Books lookup failed (status ${res.status})`);
-  const json = await res.json();
-  const item = json && json.items && json.items[0];
-  if(!item) return null;
-  const price = item.saleInfo && item.saleInfo.listPrice;
-  return {
-    title: item.volumeInfo && item.volumeInfo.title,
-    amount: price ? price.amount : null,
-    currencyCode: price ? price.currencyCode : null
-  };
-}
-
-/* ============================================================
-   BARCODE SCANNER
-   Uses html5-qrcode (loaded via CDN) rather than the browser-native
-   BarcodeDetector API, because that native API is Chrome/Android-only
-   and silently fails on iPhone/iPad - html5-qrcode works on both.
-   ============================================================ */
-let activeScanner = null;
-
-function closeBarcodeScanner(){
-  // Remove the popup FIRST, unconditionally - stopping the camera can
-  // fail or throw (e.g. if it's called before the camera finished
-  // starting up), and that used to prevent the popup from closing at all.
-  const overlay = document.getElementById('barcodeScanOverlay');
-  if(overlay) overlay.remove();
-  const scanner = activeScanner;
-  activeScanner = null;
-  if(scanner){
-    try{
-      scanner.stop().catch(()=>{}).finally(()=>{
-        try{ scanner.clear(); }catch(e){ /* already cleared/never started */ }
-      });
-    }catch(e){
-      try{ scanner.clear(); }catch(e2){ /* already cleared/never started */ }
-    }
-  }
-}
-
-function showBarcodeScanner(onResult){
-  closeBarcodeScanner();
-  if(typeof Html5Qrcode === 'undefined'){
-    alert("The barcode scanner didn't load - check your connection and try again, or enter the series name manually.");
-    return;
-  }
-  const overlay = document.createElement('div');
-  overlay.id = 'barcodeScanOverlay';
-  overlay.className = 'overlay open';
-  overlay.style.zIndex = '1100';
-  overlay.innerHTML = `
-    <div class="modal" style="max-width:380px;padding:20px;">
-      <button type="button" class="modal-close" id="barcodeScanClose">&times;</button>
-      <div class="name-block" style="margin-bottom:10px;"><span class="name">Scan a barcode</span></div>
-      <p class="settings-note" style="margin:0 0 10px;">Point your camera at the barcode on the back of the book.</p>
-      <div id="barcodeReaderRegion" style="width:100%;border-radius:8px;overflow:hidden;"></div>
-      <p id="barcodeScanError" style="color:var(--red);font-size:12px;min-height:16px;margin-top:8px;"></p>
-    </div>`;
-  document.body.appendChild(overlay);
-  document.getElementById('barcodeScanClose').addEventListener('click', closeBarcodeScanner);
-
-  activeScanner = new Html5Qrcode('barcodeReaderRegion');
-  const config = {
-    fps: 10,
-    qrbox: { width: 250, height: 120 },
-    formatsToSupport: [
-      Html5QrcodeSupportedFormats.EAN_13,
-      Html5QrcodeSupportedFormats.EAN_8,
-      Html5QrcodeSupportedFormats.UPC_A,
-      Html5QrcodeSupportedFormats.CODE_128
-    ]
-  };
-  activeScanner.start(
-    { facingMode: 'environment' },
-    config,
-    (decodedText)=>{
-      closeBarcodeScanner();
-      onResult(decodedText);
-    },
-    ()=>{ /* per-frame "no barcode found yet" - expected constantly while aiming, ignore */ }
-  ).catch((err)=>{
-    const errorEl = document.getElementById('barcodeScanError');
-    if(errorEl) errorEl.textContent = "Couldn't access the camera - check your browser's camera permission for this site.";
-  });
-}
-
-
 
 /* ============================================================
    COMPLETION WAVE
@@ -1950,18 +1757,6 @@ function milestonesListHTML(){
 let milestoneToastQueue = [];
 let milestoneToastShowing = false;
 
-function showQuickToast(message){
-  const el = document.createElement('div');
-  el.className = 'milestone-toast';
-  el.textContent = message;
-  document.body.appendChild(el);
-  requestAnimationFrame(()=> el.classList.add('show'));
-  setTimeout(()=>{
-    el.classList.remove('show');
-    setTimeout(()=> el.remove(), 300);
-  }, 2200);
-}
-
 function showNextMilestoneToast(){
   if(milestoneToastShowing || milestoneToastQueue.length === 0) return;
   milestoneToastShowing = true;
@@ -2362,11 +2157,7 @@ function detailHTML(e){
           <input type="text" class="ef-total" style="width:100%;" value="${e.status==='completed'?e.total:e.volumes.length}" placeholder="Total volumes in series">
         </div>
         <div class="ef-price-wrap" style="grid-column:1/-1;${isPremium() ? '' : 'display:none;'}">
-          <div style="display:flex;gap:8px;align-items:center;">
-            <input type="text" class="ef-price" inputmode="decimal" style="flex:1;" value="${e.pricePerVolume ?? ''}" placeholder="Default price per volume (e.g. 9.99)">
-            <button type="button" class="btn btn-ghost price-lookup-btn">Look up price</button>
-          </div>
-          <p class="settings-note ef-price-lookup-note" style="margin:4px 0 0;min-height:14px;"></p>
+          <input type="text" class="ef-price" inputmode="decimal" style="width:100%;" value="${e.pricePerVolume ?? ''}" placeholder="Default price per volume - what you paid">
         </div>
         <div class="ef-ongoing-note" style="grid-column:1/-1;font-size:12px;color:var(--muted);display:${e.status==='ongoing'?'block':'none'};">
           Ongoing series only track volumes you own or have ordered — use the + chip below to add the next one whenever you get it.
@@ -2485,32 +2276,6 @@ function renderModal(){
     await saveEntries();
     renderModal();
     renderCollection();
-  });
-
-  const priceLookupBtn = modal.querySelector('.price-lookup-btn');
-  if(priceLookupBtn) priceLookupBtn.addEventListener('click', async (ev)=>{
-    ev.stopPropagation();
-    const nameInput = modal.querySelector('.ef-name');
-    const noteEl = modal.querySelector('.ef-price-lookup-note');
-    const query = nameInput.value.trim();
-    if(!query){ noteEl.textContent = 'Enter a series name first.'; return; }
-    priceLookupBtn.textContent = '…';
-    priceLookupBtn.disabled = true;
-    noteEl.textContent = '';
-    try{
-      const result = await fetchGoogleBooksPrice(query);
-      if(!result){
-        noteEl.textContent = "No list price found for this title - enter it manually.";
-      } else {
-        modal.querySelector('.ef-price').value = result.amount;
-        noteEl.textContent = `Suggested from Google Books (${result.currencyCode}) - a publisher list price, not a rare/resale value. Check it before saving.`;
-      }
-    }catch(err){
-      noteEl.textContent = err.rateLimited ? err.message : "Couldn't reach Google Books - check your connection and try again.";
-    }finally{
-      priceLookupBtn.textContent = 'Look up price';
-      priceLookupBtn.disabled = false;
-    }
   });
 
 
@@ -2673,10 +2438,7 @@ function openAddSeriesForm(prefill){
   addRow.style.display = 'block';
   addRow.innerHTML = `
     <div class="edit-grid">
-      <div style="grid-column:1/-1;display:flex;gap:8px;align-items:center;">
-        <input type="text" id="new-name" placeholder="Series name" style="flex:1;" value="${prefill && prefill.name ? escapeAttr(prefill.name) : ''}">
-        <button type="button" class="btn btn-ghost" id="scanBarcodeBtn">Scan barcode</button>
-      </div>
+      <input type="text" id="new-name" placeholder="Series name" value="${prefill && prefill.name ? escapeAttr(prefill.name) : ''}">
       <select id="new-status">
         <option value="ongoing">Ongoing</option>
         <option value="completed">Fully published</option>
@@ -2687,8 +2449,7 @@ function openAddSeriesForm(prefill){
       </div>
       ${isPremium() ? `
       <div style="grid-column:1/-1;">
-        <input type="text" id="new-price" inputmode="decimal" style="width:100%;" placeholder="Default price per volume (auto-filled from series name)" value="${prefill && prefill.price != null ? prefill.price : ''}">
-        <p id="new-price-note" class="settings-note" style="margin:4px 0 0;min-height:14px;">${prefill && prefill.priceNote ? prefill.priceNote : ''}</p>
+        <input type="text" id="new-price" inputmode="decimal" style="width:100%;" placeholder="Default price per volume - what you paid" value="${prefill && prefill.price != null ? prefill.price : ''}">
       </div>
       ` : ''}
       <textarea id="new-notes" placeholder="Notes (optional)"></textarea>
@@ -2706,55 +2467,7 @@ function openAddSeriesForm(prefill){
     document.getElementById('new-total-wrap').style.display = ev.target.value==='completed' ? 'block' : 'none';
   });
 
-  // Automatic price lookup: fires when the name field loses focus, so the
-  // user doesn't have to click anything - only overwrites the price field
-  // if it's still empty, so it never clobbers a price someone already typed.
-  const newNameInput = document.getElementById('new-name');
   const newPriceInput = document.getElementById('new-price');
-  const newPriceNote = document.getElementById('new-price-note');
-  async function autoLookupPrice(){
-    if(!newPriceInput) return; // not premium, field doesn't exist
-    const query = newNameInput.value.trim();
-    if(!query || newPriceInput.value.trim() !== '') return;
-    newPriceNote.textContent = 'Looking up a price…';
-    try{
-      const result = await fetchGoogleBooksPrice(query);
-      if(result){
-        newPriceInput.value = result.amount;
-        newPriceNote.textContent = `Suggested from Google Books (${result.currencyCode}) - check it before saving.`;
-      } else {
-        newPriceNote.textContent = 'No list price found - enter one manually if you want.';
-      }
-    }catch(err){
-      newPriceNote.textContent = err.rateLimited ? err.message : "Couldn't reach Google Books - enter a price manually if you want.";
-    }
-  }
-  newNameInput.addEventListener('blur', autoLookupPrice);
-
-  document.getElementById('scanBarcodeBtn').addEventListener('click', ()=>{
-    showBarcodeScanner(async (code)=>{
-      newNameInput.value = 'Looking up…';
-      if(newPriceNote) newPriceNote.textContent = 'Looking up from barcode…';
-      try{
-        const result = await fetchGoogleBooksByIsbn(code);
-        if(result){
-          newNameInput.value = result.title || '';
-          if(newPriceInput && result.amount != null){
-            newPriceInput.value = result.amount;
-            newPriceNote.textContent = `Suggested from Google Books (${result.currencyCode}) - check it before saving.`;
-          } else if(newPriceNote){
-            newPriceNote.textContent = 'Found the title, but no list price for it.';
-          }
-        } else {
-          newNameInput.value = '';
-          alert(`No book found for barcode ${code}. Enter the series name manually.`);
-        }
-      }catch(err){
-        newNameInput.value = '';
-        alert(err.rateLimited ? err.message : "Couldn't look up that barcode - check your connection and try again.");
-      }
-    });
-  });
 
   let pendingCoverFile = null;
   document.getElementById('new-cover-input').addEventListener('change', (ev)=>{
@@ -2809,15 +2522,10 @@ document.getElementById('showAddBtn').addEventListener('click', ()=>{
 });
 
 /* ============================================================
-   QUICK SCAN
-   The one-tap "scan and it just handles it" flow: scan any book's
-   barcode from the home screen (not tied to the add-series form).
-   If the scanned title looks like a volume of a series already in
-   the ledger, it asks to add a volume there instead of creating a
-   duplicate series - since title matching from a barcode lookup is
-   inherently fuzzy (different editions phrase titles differently),
-   it always confirms before touching existing data rather than
-   silently guessing.
+   SERIES TITLE MATCHING
+   Used to key community ratings so slightly different naming (e.g.
+   "Chainsaw Man" vs "Chainsaw Man, Vol. 12") still aggregates as the
+   same series.
    ============================================================ */
 function normalizeSeriesTitle(title){
   return (title || '')
@@ -2827,17 +2535,6 @@ function normalizeSeriesTitle(title){
     .replace(/,?\s*(vol(ume)?\.?\s*\d+|#\d+|\(\s*\d+\s*\)|\bbook\s*\d+)\s*$/i, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
-}
-
-function findMatchingSeries(scannedTitle){
-  const normalizedScan = normalizeSeriesTitle(scannedTitle);
-  if(!normalizedScan) return null;
-  return entries.find(e => {
-    const normalizedEntry = normalizeSeriesTitle(e.name);
-    return normalizedEntry === normalizedScan
-      || normalizedEntry.includes(normalizedScan)
-      || normalizedScan.includes(normalizedEntry);
-  }) || null;
 }
 
 /* ============================================================
@@ -2897,44 +2594,6 @@ async function loadCommunityRating(entry){
     el.textContent = '';
   }
 }
-
-document.getElementById('quickScanBtn').addEventListener('click', ()=>{
-  showBarcodeScanner(async (code)=>{
-    let result;
-    try{
-      result = await fetchGoogleBooksByIsbn(code);
-    }catch(err){
-      alert(err.rateLimited ? err.message : "Couldn't look up that barcode - check your connection and try again.");
-      return;
-    }
-    if(!result || !result.title){
-      alert(`No book found for barcode ${code}. Try adding it manually instead.`);
-      return;
-    }
-    const match = findMatchingSeries(result.title);
-    if(match){
-      const addVolume = await showConfirmDialog(
-        `This looks like a volume of "${match.name}", which is already in your ledger. Add a volume to it?`,
-        'Add volume'
-      );
-      if(addVolume){
-        if(wouldExceedFreeLimit(false, 1)){ showPaywall(); return; }
-        match.volumes.push('owned');
-        await saveEntries();
-        renderCollection();
-        showQuickToast(`Added to ${match.name}`);
-        return;
-      }
-      // Declined - user says this is actually a different/new series
-      // despite the name similarity, so fall through to adding it fresh.
-    }
-    openAddSeriesForm({
-      name: result.title,
-      price: result.amount != null ? result.amount : null,
-      priceNote: result.amount != null ? `Suggested from Google Books (${result.currencyCode}) - check it before saving.` : ''
-    });
-  });
-});
 
 
 /* ============================================================
@@ -3022,9 +2681,7 @@ function renderSettings(){
     <button type="button" class="btn btn-primary" id="openPaywallBtn" style="margin-bottom:20px;">Unlock Premium</button>
     ` : `
     <div class="name-block" style="margin-bottom:10px;"><span class="name">Premium</span></div>
-    <p style="color:var(--muted);font-size:13px;margin-top:-6px;margin-bottom:12px;">✓ Unlocked — thanks for supporting the app.</p>
-    <button type="button" class="btn btn-ghost" id="fillPricesBtn" style="margin-bottom:20px;">Fill missing prices</button>
-    <p class="settings-note" style="margin-top:-16px;margin-bottom:20px;">Looks up a price for every series that doesn't have one yet, using the same Google Books lookup as "Look up price" - only fills blanks, never overwrites a price you already set.</p>
+    <p style="color:var(--muted);font-size:13px;margin-top:-6px;margin-bottom:20px;">✓ Unlocked — thanks for supporting the app.</p>
     `}
     <div class="name-block" style="margin-bottom:10px;margin-top:20px;"><span class="name">Profile</span></div>
     <div class="avatar-row">
@@ -3135,13 +2792,6 @@ function renderSettings(){
   });
   const openPaywallBtn = document.getElementById('openPaywallBtn');
   if(openPaywallBtn) openPaywallBtn.addEventListener('click', showPaywall);
-
-  const fillPricesBtn = document.getElementById('fillPricesBtn');
-  if(fillPricesBtn) fillPricesBtn.addEventListener('click', async ()=>{
-    fillPricesBtn.disabled = true;
-    await fillMissingPrices(fillPricesBtn);
-    fillPricesBtn.disabled = false;
-  });
 
   document.querySelectorAll('#currencyGrid .theme-swatch').forEach(sw=>{
     sw.addEventListener('click', async ()=>{
