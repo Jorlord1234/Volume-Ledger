@@ -2538,10 +2538,19 @@ document.getElementById('quickScanBtn').addEventListener('click', ()=>{
       return;
     }
     const cleanedTitle = stripVolumeSuffixForDisplay(result.title);
+    // A category outside comics/manga/graphic novels is a strong signal
+    // this is a mismatch (like the unrelated "Demonslayer" comic that got
+    // matched by title-text search before) - worth a heads-up either way,
+    // since the user still makes the final call either way.
+    // Shown as neutral context, not a "this looks wrong" judgment - the
+    // app is used for all kinds of books, not just manga/comics, so there's
+    // no single category that counts as "correct." Letting the person see
+    // what Google filed it under is enough for them to judge for themselves.
+    const categoryNote = result.categories.length ? ` (${result.categories[0]})` : '';
     const match = findMatchingSeries(result.title);
     if(match){
       const addVolume = await showConfirmDialog(
-        `This looks like a volume of "${match.name}", which is already in your ledger. Add a volume to it?`,
+        `This looks like a volume of "${match.name}"${categoryNote}, which is already in your ledger. Add a volume to it?`,
         'Add volume'
       );
       if(addVolume){
@@ -2556,7 +2565,7 @@ document.getElementById('quickScanBtn').addEventListener('click', ()=>{
       // despite the name similarity, so fall through to adding it fresh.
     }
     const useTitle = await showConfirmDialog(
-      `Found "${cleanedTitle}" from the barcode. Use this as the series name?`,
+      `Found "${cleanedTitle}"${categoryNote} from the barcode. Use this as the series name?`,
       'Use this name'
     );
     openAddSeriesForm({
@@ -2650,6 +2659,7 @@ async function fetchGoogleBooksByIsbn(isbn){
   const price = item.saleInfo && item.saleInfo.listPrice;
   return {
     title: item.volumeInfo && item.volumeInfo.title,
+    categories: (item.volumeInfo && item.volumeInfo.categories) || [],
     amount: price ? price.amount : null,
     currencyCode: price ? price.currencyCode : null
   };
@@ -2665,21 +2675,36 @@ function closeBarcodeScanner(){
   if(overlay) overlay.remove();
   const scanner = activeScanner;
   activeScanner = null;
-  if(scanner){
-    try{
-      scanner.stop().catch(()=>{}).finally(()=>{
-        try{ scanner.clear(); }catch(e){ /* already cleared/never started */ }
-      });
-    }catch(e){
-      try{ scanner.clear(); }catch(e2){ /* already cleared/never started */ }
-    }
-  }
+  if(!scanner) return Promise.resolve();
+  // This return value matters now: showBarcodeScanner awaits it before
+  // starting a new camera session. Without waiting for the camera to
+  // actually finish releasing, opening the scanner a second time would
+  // race against the still-shutting-down first session and fail - which
+  // is exactly the "works once, then never again" bug this fixes.
+  return (async ()=>{
+    try{ await scanner.stop(); }catch(e){ /* wasn't running, or already stopped - fine either way */ }
+    try{ scanner.clear(); }catch(e){ /* already cleared */ }
+    // A short buffer on top of stop() resolving - some browsers report
+    // the camera as released slightly before the hardware actually is.
+    await new Promise(r => setTimeout(r, 350));
+  })();
 }
 
-function showBarcodeScanner(onResult){
-  closeBarcodeScanner();
+async function showBarcodeScanner(onResult){
+  await closeBarcodeScanner();
   if(typeof Html5Qrcode === 'undefined'){
     alert("The barcode scanner didn't load - check your connection and try again, or add the series manually.");
+    return;
+  }
+  // iOS has a long-standing, still-open WebKit bug where camera access
+  // is blocked specifically when a site is running installed/full-screen
+  // from the home screen (separate from, and unrelated to, the camera
+  // permission itself - granting permission doesn't fix this). Detecting
+  // it upfront avoids a confusing generic error and a doomed attempt.
+  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent);
+  const isStandalone = window.navigator.standalone === true;
+  if(isIOS && isStandalone){
+    alert("Scanning doesn't work when this app is opened from the home screen icon on iPhone - that's an Apple/iOS limitation with installed web apps, not a setting you can fix here. Open this same page in Safari directly (not the home screen icon) to use the scanner, then come back to the icon for everything else.");
     return;
   }
   const overlay = document.createElement('div');
@@ -2717,7 +2742,7 @@ function showBarcodeScanner(onResult){
     // barcode lines need more detail than a QR code does, and without
     // this the camera can default to a lower-res stream that's too
     // blurry to read at the distance where the barcode isn't distorted.
-    { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] },
+    { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
     config,
     (decodedText)=>{
       closeBarcodeScanner();
