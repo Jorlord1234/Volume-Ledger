@@ -2735,14 +2735,22 @@ async function showBarcodeScanner(onResult){
     // On Android Chrome this hands decoding to the phone's own faster,
     // more accurate barcode reader when available - iOS still falls back
     // to the built-in JS decoder either way, so this is purely additive.
-    experimentalFeatures: { useBarCodeDetectorIfSupported: true }
-  };
-  activeScanner.start(
+    experimentalFeatures: { useBarCodeDetectorIfSupported: true },
     // A specific resolution request, not just "environment" - fine
     // barcode lines need more detail than a QR code does, and without
     // this the camera can default to a lower-res stream that's too
     // blurry to read at the distance where the barcode isn't distorted.
-    { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+    // This has to live here, not in the first start() argument - that
+    // one is only allowed exactly one key (facingMode OR deviceId),
+    // which was the actual bug breaking the camera entirely.
+    videoConstraints: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 }
+    }
+  };
+  activeScanner.start(
+    { facingMode: { ideal: 'environment' } },
     config,
     (decodedText)=>{
       closeBarcodeScanner();
