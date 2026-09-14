@@ -2751,7 +2751,15 @@ async function showBarcodeScanner(onResult){
     ()=>{ /* per-frame "no barcode found yet" - expected constantly while aiming, ignore */ }
   ).catch((err)=>{
     const errorEl = document.getElementById('barcodeScanError');
-    if(errorEl) errorEl.textContent = "Couldn't access the camera - check your browser's camera permission for this site.";
+    // Show the REAL error instead of always assuming it's a permission
+    // problem - that generic guess has been hiding the actual cause for
+    // a while now. err.name is the standard browser error type
+    // (NotAllowedError, NotFoundError, NotReadableError, OverconstrainedError,
+    // etc.) - whatever shows up here is the real next clue.
+    const name = err && err.name ? err.name : 'UnknownError';
+    const message = err && err.message ? err.message : String(err);
+    if(errorEl) errorEl.textContent = `Camera error: ${name} - ${message}`;
+    console.error('Barcode scanner camera error:', err);
   });
 }
 
