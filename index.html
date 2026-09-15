@@ -448,16 +448,23 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .name-block{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .favorite-btn{
-  background:none;
-  border:none;
+  background:var(--surface-alt);
+  border:1px solid var(--border);
+  border-radius:50%;
+  width:30px;
+  height:30px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
   color:var(--muted);
-  font-size:20px;
+  font-size:16px;
   line-height:1;
   cursor:pointer;
-  padding:0 2px;
+  padding:0;
+  flex-shrink:0;
 }
-.favorite-btn.active{color:var(--gold);}
-.favorite-btn:hover{opacity:0.8;}
+.favorite-btn:hover{border-color:var(--red);color:var(--red);}
+.favorite-btn.active{background:var(--red);border-color:var(--red);color:#fff;}
 .rating-picker{display:flex;gap:2px;font-size:18px;line-height:1;cursor:pointer;color:var(--gold);}
 .rating-star{transition:transform .1s;}
 .rating-star:hover{transform:scale(1.15);}
@@ -486,6 +493,22 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 .milestone-row{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;color:var(--muted);opacity:0.5;}
 .milestone-row.achieved{color:var(--text);opacity:1;}
 .milestone-row-star{color:var(--gold);width:16px;text-align:center;}
+.rank-card{
+  background:var(--surface-alt);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:14px;
+  margin-bottom:16px;
+}
+.rank-current{font-size:18px;font-weight:700;color:var(--gold);margin-bottom:8px;}
+.rank-bar{
+  height:8px;
+  background:var(--surface);
+  border-radius:4px;
+  overflow:hidden;
+  margin-bottom:6px;
+}
+.rank-bar-fill{height:100%;background:var(--gold);transition:width .3s;}
 
 .private-check{
   display:flex;
@@ -861,6 +884,57 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   margin:16px 0 10px;
 }
 .settings-section-label:first-child{margin-top:0;}
+
+.settings-tabs{
+  display:flex;
+  gap:4px;
+  border-bottom:1px solid var(--border);
+  margin-bottom:16px;
+  overflow-x:auto;
+}
+.settings-tab-btn{
+  background:none;
+  border:none;
+  color:var(--muted);
+  font-size:13px;
+  font-weight:600;
+  padding:8px 10px;
+  cursor:pointer;
+  border-bottom:2px solid transparent;
+  white-space:nowrap;
+}
+.settings-tab-btn:hover{color:var(--text);}
+.settings-tab-btn.active{color:var(--gold);border-bottom-color:var(--gold);}
+
+.toggle-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:8px 0;
+  font-size:13px;
+}
+.switch{position:relative;display:inline-block;width:38px;height:22px;flex-shrink:0;}
+.switch input{opacity:0;width:0;height:0;}
+.switch-slider{
+  position:absolute;
+  cursor:pointer;
+  top:0; left:0; right:0; bottom:0;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:22px;
+  transition:.15s;
+}
+.switch-slider::before{
+  content:"";
+  position:absolute;
+  height:16px; width:16px;
+  left:2px; bottom:2px;
+  background:var(--muted);
+  border-radius:50%;
+  transition:.15s;
+}
+.switch input:checked + .switch-slider{background:var(--gold);border-color:var(--gold);}
+.switch input:checked + .switch-slider::before{transform:translateX(16px);background:#1a1a1a;}
 
 .theme-grid{
   display:grid;
@@ -1300,13 +1374,75 @@ function volNum(entry, idx){ return entry.startsAtZero ? idx : idx + 1; }
 
 /* ============================================================
    PRICE TRACKER
-   Price lives per-entry (default price/volume) with optional
-   per-volume overrides for rare/out-of-print books. Only volumes
-   marked "owned" count toward value - ordered/planned/missing don't.
+   Price lives per-entry (default price/volume, tagged with its own
+   currency) with optional per-volume overrides for rare/out-of-print
+   books (same currency as the series). Only volumes marked "owned"
+   count toward value - ordered/planned/missing don't.
+
+   Exchange rates come from Frankfurter (api.frankfurter.dev) - a
+   genuinely free, no-key, ECB-sourced public service, not a "shared
+   anonymous pool that runs out" situation like Google Books was.
+   Still cached for 24h locally regardless, since rates only change
+   daily anyway and there's no reason to ask more often than that.
    ============================================================ */
+let exchangeRateCache = {}; // e.g. { 'EUR_USD': 1.08 } - populated async, read synchronously
+
+function getCachedRate(from, to){
+  if(from === to) return 1;
+  const key = `${from}_${to}`;
+  if(exchangeRateCache[key] != null) return exchangeRateCache[key];
+  const reverseKey = `${to}_${from}`;
+  if(exchangeRateCache[reverseKey] != null) return 1 / exchangeRateCache[reverseKey];
+  return null; // not loaded yet - caller falls back to unconverted
+}
+
+async function refreshExchangeRates(){
+  const pairs = [['EUR','USD']]; // the only pair CURRENCIES actually needs
+  for(const [from, to] of pairs){
+    const key = `${from}_${to}`;
+    const cacheKey = `xrate_${key}`;
+    try{
+      const cacheRaw = await Storage.get(cacheKey, false);
+      if(cacheRaw){
+        const cached = JSON.parse(cacheRaw);
+        if(Date.now() - cached.fetchedAt < 24*60*60*1000){
+          exchangeRateCache[key] = cached.rate;
+          continue; // still fresh, no need to fetch
+        }
+      }
+    }catch(e){ /* no cache yet */ }
+    try{
+      const res = await fetch(`https://api.frankfurter.dev/v1/latest?from=${from}&to=${to}`);
+      if(!res.ok) throw new Error('rate fetch failed');
+      const json = await res.json();
+      const rate = json.rates && json.rates[to];
+      if(!rate) throw new Error('rate missing from response');
+      exchangeRateCache[key] = rate;
+      await Storage.set(cacheKey, JSON.stringify({rate, fetchedAt: Date.now()}), false);
+    }catch(e){
+      // Fall back to a stale cached rate rather than nothing, if one exists.
+      try{
+        const cacheRaw = await Storage.get(cacheKey, false);
+        if(cacheRaw) exchangeRateCache[key] = JSON.parse(cacheRaw).rate;
+      }catch(e2){ /* genuinely nothing available - conversions show unconverted until this succeeds */ }
+    }
+  }
+}
+
+function convertToDisplayCurrency(amount, fromCurrency){
+  if(!amount) return 0;
+  const target = currentCurrency;
+  if(!fromCurrency || fromCurrency === target) return amount;
+  const rate = getCachedRate(fromCurrency, target);
+  if(rate == null) return amount; // rate not loaded yet - corrects itself once it is
+  return amount * rate;
+}
+
 function volumePrice(e, idx){
-  if(e.priceOverrides && e.priceOverrides[idx] != null) return Number(e.priceOverrides[idx]);
-  return Number(e.pricePerVolume) || 0;
+  const raw = (e.priceOverrides && e.priceOverrides[idx] != null)
+    ? Number(e.priceOverrides[idx])
+    : Number(e.pricePerVolume) || 0;
+  return convertToDisplayCurrency(raw, e.priceCurrency || currentCurrency);
 }
 function seriesValue(e){
   return e.volumes.reduce((sum, status, idx) =>
@@ -1317,6 +1453,13 @@ function collectionValue(){
 }
 function formatCurrency(n){
   const c = CURRENCIES.find(c => c.code === currentCurrency) || CURRENCIES[0];
+  return new Intl.NumberFormat(c.locale, {style:'currency', currency:c.code}).format(n || 0);
+}
+// For showing a raw stored value in whatever currency it was actually
+// entered in - different from formatCurrency(), which always uses the
+// display-currency setting and expects an already-converted number.
+function formatCurrencyIn(n, code){
+  const c = CURRENCIES.find(c => c.code === code) || CURRENCIES[0];
   return new Intl.NumberFormat(c.locale, {style:'currency', currency:c.code}).format(n || 0);
 }
 
@@ -1438,6 +1581,18 @@ async function loadCloudPreferences(){
     }
     if(Array.isArray(prefs.milestonesSeen)){
       await Storage.set('milestones_seen', JSON.stringify(prefs.milestonesSeen), false);
+    }
+    if(typeof prefs.hideRatings === 'boolean'){
+      hideRatings = prefs.hideRatings;
+      await Storage.set('hide_ratings', hideRatings ? 'true' : 'false', false);
+    }
+    if(typeof prefs.hideMilestoneToasts === 'boolean'){
+      hideMilestoneToasts = prefs.hideMilestoneToasts;
+      await Storage.set('hide_milestone_toasts', hideMilestoneToasts ? 'true' : 'false', false);
+    }
+    if(typeof prefs.hideCommunityRatings === 'boolean'){
+      hideCommunityRatings = prefs.hideCommunityRatings;
+      await Storage.set('hide_community_ratings', hideCommunityRatings ? 'true' : 'false', false);
     }
   }catch(e){
     // Setup SQL not run yet, or offline - just keep whatever's on this
@@ -1582,6 +1737,7 @@ async function loadRealCollection(){
   seedCompletedIds();
   await preloadCoversFromSupabase();
   await preloadAvatar();
+  await preloadBackground();
   await saveLocalCache();
   render();
 }
@@ -1596,6 +1752,33 @@ async function preloadAvatar(){
     if(error) throw error;
     if(data && data.data) coverCache['__avatar__'] = data.data;
   }catch(e){ /* no avatar set yet - that's fine */ }
+}
+
+// A dark gradient overlay always sits on top of a custom background,
+// regardless of what photo someone picks - this guarantees text and UI
+// stay readable no matter how bright/busy the chosen image is.
+function applyCustomBackground(dataUri){
+  const el = document.getElementById('bgLayer');
+  if(dataUri){
+    el.style.backgroundImage = `linear-gradient(180deg, rgba(12,12,16,0.45), rgba(12,12,16,0.75)), url('${dataUri}')`;
+  } else {
+    el.style.backgroundImage = ''; // falls back to the default CSS texture
+  }
+}
+
+async function preloadBackground(){
+  if(!authUser || !supabaseClient) return;
+  try{
+    const { data, error } = await supabaseClient
+      .from('covers').select('data')
+      .eq('user_id', authUser.id).eq('series_id', '__background__')
+      .maybeSingle();
+    if(error) throw error;
+    if(data && data.data){
+      coverCache['__background__'] = data.data;
+      applyCustomBackground(data.data);
+    }
+  }catch(e){ /* no custom background set yet - that's fine */ }
 }
 
 async function preloadCoversFromSupabase(){
@@ -1735,6 +1918,45 @@ const MILESTONES = [
   {id:'completed_10', check: s => s.completedCount >= 10,  label:'10 series completed!'},
 ];
 
+/* ============================================================
+   RANKS
+   A tier based on total books owned, purely computed from local
+   data like milestones - not a separate save, just a different lens
+   on the same numbers. Thresholds are a first guess, not tuned
+   against real usage data beyond this one collection, so they're
+   easy to adjust in one place if they end up feeling off.
+   ============================================================ */
+const RANKS = [
+  {id:'newcomer',   label:'Newcomer',            min:0},
+  {id:'collector',  label:'Collector',           min:10},
+  {id:'curator',    label:'Curator',             min:50},
+  {id:'archivist',  label:'Archivist',           min:150},
+  {id:'librarian',  label:'Librarian',           min:300},
+  {id:'grandmaster',label:'Grandmaster Archivist',min:600},
+];
+
+function getCurrentRank(){
+  const totalBooks = entries.reduce((sum,e)=> sum + countOwned(e), 0);
+  let current = RANKS[0];
+  for(const r of RANKS){ if(totalBooks >= r.min) current = r; }
+  const next = RANKS[RANKS.indexOf(current) + 1] || null;
+  return { current, next, totalBooks };
+}
+
+function rankCardHTML(){
+  const { current, next, totalBooks } = getCurrentRank();
+  const progressPct = next ? Math.min(100, Math.round((totalBooks - current.min) / (next.min - current.min) * 100)) : 100;
+  return `
+    <div class="rank-card">
+      <div class="rank-current">${escapeHTML(current.label)}</div>
+      ${next ? `
+        <div class="rank-bar"><div class="rank-bar-fill" style="width:${progressPct}%;"></div></div>
+        <p class="settings-note">${totalBooks} / ${next.min} books to reach ${escapeHTML(next.label)}</p>
+      ` : `<p class="settings-note">Top rank reached - ${totalBooks} books tracked.</p>`}
+    </div>
+  `;
+}
+
 function milestonesListHTML(){
   const stats = {
     totalBooks: entries.reduce((sum,e)=> sum + countOwned(e), 0),
@@ -1792,6 +2014,7 @@ async function checkMilestones(){
   try{ await Storage.set('milestones_seen', JSON.stringify(seen), false); }catch(e){ /* not critical - worst case it shows again next time */ }
   pushCloudPreference('milestonesSeen', seen);
 
+  if(hideMilestoneToasts) return; // still tracked/marked seen above, just not popped up
   newlyReached.forEach(m => milestoneToastQueue.push(m.label));
   showNextMilestoneToast();
 }
@@ -1893,7 +2116,7 @@ function listRowHTML(e){
     <div class="list-row-top">
       <div class="list-cover" style="${bgStyle}"></div>
       <div class="list-name">${e.favorite ? '<span style="color:var(--gold);">♥</span> ' : ''}${escapeHTML(e.name)}</div>
-      ${e.rating ? `<span class="list-rating">${starRatingHTML(e.rating)}</span>` : ''}
+      ${(e.rating && !hideRatings) ? `<span class="list-rating">${starRatingHTML(e.rating)}</span>` : ''}
       <span class="list-stats">${countsText(e)}</span>
       <span class="cat-pill list-status-pill status-${e.status}">${e.status==='completed'?'Fully published':'Ongoing'}</span>
     </div>
@@ -2008,7 +2231,7 @@ function showPricePopup(entry, idx){
     <div class="modal" style="max-width:340px;padding:22px 20px 20px;">
       <button type="button" class="modal-close" id="pricePopupClose">&times;</button>
       <div class="name-block" style="margin-bottom:4px;"><span class="name">Volume ${volNum(entry, idx)} price</span></div>
-      <p class="settings-note" style="margin:0 0 10px;">Leave blank to use the series default (${formatCurrency(entry.pricePerVolume||0)}).</p>
+      <p class="settings-note" style="margin:0 0 10px;">Leave blank to use the series default (${formatCurrencyIn(entry.pricePerVolume||0, entry.priceCurrency || currentCurrency)}).</p>
       <input type="text" id="pricePopupInput" inputmode="decimal" placeholder="e.g. 9.99" value="${current != null ? current : ''}" style="width:100%;">
       <div style="display:flex;gap:8px;margin-top:14px;">
         <button type="button" class="btn btn-ghost" id="pricePopupCancel" style="flex:1;">Cancel</button>
@@ -2109,8 +2332,8 @@ function resizeVolumes(entry, newTotal){
    all handled correctly - aspect ratio is always preserved and
    small images are never upscaled.
    ============================================================ */
-function readAndCompressImage(file){
-  const MAX_DIM = 640;
+function readAndCompressImage(file, maxDim){
+  const MAX_DIM = maxDim || 640;
   return new Promise((resolve, reject)=>{
     const reader = new FileReader();
     reader.onload = (ev)=>{
@@ -2153,7 +2376,12 @@ function detailHTML(e){
           <input type="text" class="ef-total" style="width:100%;" value="${e.status==='completed'?e.total:e.volumes.length}" placeholder="Total volumes in series">
         </div>
         <div class="ef-price-wrap" style="grid-column:1/-1;${isPremium() ? '' : 'display:none;'}">
-          <input type="text" class="ef-price" inputmode="decimal" style="width:100%;" value="${e.pricePerVolume ?? ''}" placeholder="Default price per volume - what you paid">
+          <div style="display:flex;gap:8px;">
+            <input type="text" class="ef-price" inputmode="decimal" style="flex:1;" value="${e.pricePerVolume ?? ''}" placeholder="Default price per volume - what you paid">
+            <select class="ef-price-currency" style="width:auto;">
+              ${CURRENCIES.map(c => `<option value="${c.code}" ${(e.priceCurrency || currentCurrency) === c.code ? 'selected' : ''}>${c.code}</option>`).join('')}
+            </select>
+          </div>
         </div>
         <div class="ef-ongoing-note" style="grid-column:1/-1;font-size:12px;color:var(--muted);display:${e.status==='ongoing'?'block':'none'};">
           Ongoing series only track volumes you own or have ordered — use the + chip below to add the next one whenever you get it.
@@ -2184,10 +2412,12 @@ function detailHTML(e){
         <button class="favorite-btn ${e.favorite?'active':''}" id="favoriteBtn" title="${e.favorite?'Remove from favorites':'Add to favorites'}">${e.favorite?'♥':'♡'}</button>
       </div>
       <span class="count">${countsText(e)}</span>
+      ${!hideRatings ? `
       <div class="rating-picker" id="ratingPicker" data-value="${e.rating||0}" title="Your rating">
         ${[1,2,3,4,5].map(i => `<span class="rating-star" data-value="${i}">${i <= (e.rating||0) ? '★' : '☆'}</span>`).join('')}
       </div>
-      <span class="settings-note" id="communityRating" style="margin-left:8px;">Loading community rating…</span>
+      ` : ''}
+      ${(!hideRatings && !hideCommunityRatings) ? `<span class="settings-note" id="communityRating" style="margin-left:8px;">Loading community rating…</span>` : ''}
     </div>
     <div class="actions">
       <button class="icon-btn edit-btn">✎ Edit</button>
@@ -2342,6 +2572,8 @@ function renderModal(){
       const priceInput = modal.querySelector('.ef-price');
       const priceVal = parseFloat((priceInput ? priceInput.value : '').replace(',', '.'));
       entry.pricePerVolume = isFinite(priceVal) && priceVal > 0 ? priceVal : undefined;
+      const currencySelect = modal.querySelector('.ef-price-currency');
+      entry.priceCurrency = entry.pricePerVolume != null ? (currencySelect ? currencySelect.value : currentCurrency) : entry.priceCurrency;
     }
     if(status === 'completed'){
       const totalInput = modal.querySelector('.ef-total');
@@ -2445,7 +2677,12 @@ function openAddSeriesForm(prefill){
       </div>
       ${isPremium() ? `
       <div style="grid-column:1/-1;">
-        <input type="text" id="new-price" inputmode="decimal" style="width:100%;" placeholder="Default price per volume - what you paid" value="${prefill && prefill.price != null ? prefill.price : ''}">
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="new-price" inputmode="decimal" style="flex:1;" placeholder="Default price per volume - what you paid" value="${prefill && prefill.price != null ? prefill.price : ''}">
+          <select id="new-price-currency" style="width:auto;">
+            ${CURRENCIES.map(c => `<option value="${c.code}" ${((prefill && prefill.priceCurrency) || currentCurrency) === c.code ? 'selected' : ''}>${c.code}</option>`).join('')}
+          </select>
+        </div>
         <p class="settings-note" style="margin:4px 0 0;min-height:14px;">${prefill && prefill.priceNote ? prefill.priceNote : ''}</p>
       </div>
       ` : ''}
@@ -2471,6 +2708,22 @@ function openAddSeriesForm(prefill){
     pendingCoverFile = ev.target.files[0] || null;
     document.getElementById('new-cover-filename').textContent = pendingCoverFile ? pendingCoverFile.name : '';
   });
+  if(prefill && prefill.coverUrl){
+    const filenameEl = document.getElementById('new-cover-filename');
+    if(filenameEl) filenameEl.textContent = 'Fetching cover from barcode…';
+    fetch(prefill.coverUrl)
+      .then(res => { if(!res.ok) throw new Error('cover fetch failed'); return res.blob(); })
+      .then(blob => {
+        pendingCoverFile = blob;
+        if(filenameEl) filenameEl.textContent = 'Cover found - will use this unless you pick your own above.';
+      })
+      .catch(()=>{
+        // Fails silently and falls back to no cover, same as before this
+        // existed - Google's cover server doesn't always allow this kind
+        // of cross-site fetch, so this genuinely won't always work.
+        if(filenameEl) filenameEl.textContent = '';
+      });
+  }
   document.getElementById('cancelAdd').addEventListener('click', ()=>{
     addRow.style.display='none';
   });
@@ -2492,7 +2745,11 @@ function openAddSeriesForm(prefill){
     }
     if(newPriceInput){
       const priceVal = parseFloat(newPriceInput.value.replace(',', '.'));
-      if(isFinite(priceVal) && priceVal > 0) entry.pricePerVolume = priceVal;
+      if(isFinite(priceVal) && priceVal > 0){
+        entry.pricePerVolume = priceVal;
+        const currencySelect = document.getElementById('new-price-currency');
+        entry.priceCurrency = currencySelect ? currencySelect.value : currentCurrency;
+      }
     }
     if(pendingCoverFile){
       try{
@@ -2565,7 +2822,9 @@ document.getElementById('quickScanBtn').addEventListener('click', ()=>{
     openAddSeriesForm({
       name: useTitle ? cleanedTitle : '',
       price: result.amount != null ? result.amount : null,
-      priceNote: result.amount != null ? `Suggested from Google Books (${result.currencyCode}) - manga is often missing or wrong here, so double-check this before saving.` : ''
+      priceCurrency: result.currencyCode,
+      priceNote: result.amount != null ? `Suggested from Google Books (${result.currencyCode}) - manga is often missing or wrong here, so double-check this before saving.` : '',
+      coverUrl: useTitle ? result.coverUrl : null
     });
   });
 });
@@ -2651,11 +2910,15 @@ async function fetchGoogleBooksByIsbn(isbn){
   const item = json && json.items && json.items[0];
   if(!item) return null;
   const price = item.saleInfo && item.saleInfo.listPrice;
+  const rawCoverUrl = item.volumeInfo && item.volumeInfo.imageLinks && item.volumeInfo.imageLinks.thumbnail;
   return {
     title: item.volumeInfo && item.volumeInfo.title,
     categories: (item.volumeInfo && item.volumeInfo.categories) || [],
     amount: price ? price.amount : null,
-    currencyCode: price ? price.currencyCode : null
+    currencyCode: price ? price.currencyCode : null,
+    // Google often returns http:// links, which get blocked as mixed
+    // content on an https:// site - upgrade them.
+    coverUrl: rawCoverUrl ? rawCoverUrl.replace(/^http:/, 'https:') : null
   };
 }
 
@@ -2909,86 +3172,169 @@ async function saveCurrency(code){
   pushCloudPreference('currency', code);
 }
 
+/* ============================================================
+   DISPLAY TOGGLES
+   Let people hide UI they don't personally want, without removing
+   the underlying feature or data - someone who hides ratings can
+   still turn it back on later and find their old ratings intact.
+   ============================================================ */
+let hideRatings = false;
+let hideMilestoneToasts = false;
+let hideCommunityRatings = false;
+
+async function loadDisplayToggles(){
+  try{ hideRatings = (await Storage.get('hide_ratings', false)) === 'true'; }catch(e){}
+  try{ hideMilestoneToasts = (await Storage.get('hide_milestone_toasts', false)) === 'true'; }catch(e){}
+  try{ hideCommunityRatings = (await Storage.get('hide_community_ratings', false)) === 'true'; }catch(e){}
+}
+
+async function setDisplayToggle(name, value){
+  if(name === 'hideRatings') hideRatings = value;
+  if(name === 'hideMilestoneToasts') hideMilestoneToasts = value;
+  if(name === 'hideCommunityRatings') hideCommunityRatings = value;
+  const storageKey = {hideRatings:'hide_ratings', hideMilestoneToasts:'hide_milestone_toasts', hideCommunityRatings:'hide_community_ratings'}[name];
+  try{ await Storage.set(storageKey, value ? 'true' : 'false', false); }catch(e){ /* stays applied for this session at least */ }
+  pushCloudPreference(name, value);
+}
+
+let currentSettingsTab = 'account';
+
 function renderSettings(){
   const modal = document.getElementById('settingsModal');
   const avatarUri = coverCache['__avatar__'];
+  const backgroundUri = coverCache['__background__'];
+  const tab = currentSettingsTab;
+
+  let tabContentHTML = '';
+  if(tab === 'account'){
+    tabContentHTML = `
+      ${!isPremium() ? `
+      <div class="name-block" style="margin-bottom:10px;"><span class="name">Premium</span></div>
+      <button type="button" class="btn btn-primary" id="openPaywallBtn" style="margin-bottom:20px;">Unlock Premium</button>
+      ` : `
+      <div class="name-block" style="margin-bottom:10px;"><span class="name">Premium</span></div>
+      <p style="color:var(--muted);font-size:13px;margin-top:-6px;margin-bottom:20px;">✓ Unlocked — thanks for supporting the app.</p>
+      `}
+      <div class="name-block" style="margin-bottom:10px;"><span class="name">Profile</span></div>
+      <div class="avatar-row">
+        <div class="avatar-preview" style="${avatarUri ? `background-image:url('${avatarUri}');background-size:cover;background-position:center;` : ''}"></div>
+        <div>
+          <label class="btn btn-ghost cover-upload-btn">${avatarUri?'Change avatar':'Add avatar'}<input type="file" accept="image/*" id="avatarInput" style="display:none;"></label>
+          ${avatarUri ? '<button type="button" class="btn btn-ghost" id="removeAvatarBtn" style="margin-left:6px;">Remove</button>' : ''}
+        </div>
+      </div>
+      <div class="name-block" style="margin-bottom:10px;margin-top:20px;"><span class="name">Password</span></div>
+      <div class="auth-field auth-password-field">
+        <input type="password" id="settingsNewPassword" placeholder="New password">
+        <button type="button" class="auth-eye-btn" id="settingsPwEyeBtn" aria-label="Show password">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+      <button class="btn btn-ghost" id="settingsUpdatePasswordBtn" style="width:100%;margin-bottom:6px;">Change password</button>
+      <div id="settingsAccountMsg" style="font-size:12px;color:var(--muted);min-height:16px;"></div>
+      <div class="edit-actions" style="justify-content:flex-start;flex-wrap:wrap;margin-top:10px;">
+        <button class="btn btn-ghost" id="settingsSignOutBtn">Sign out</button>
+        <button class="btn btn-danger" id="settingsDeleteAccountBtn">Delete account</button>
+      </div>
+    `;
+  } else if(tab === 'appearance'){
+    tabContentHTML = `
+      <div class="settings-section-label">Theme presets</div>
+      <div class="theme-grid" id="themeGrid">
+        ${THEME_PRESETS.map((p, i) => `
+          <div class="theme-swatch ${isPresetActive(p) ? 'active' : ''}" data-idx="${i}">
+            <div class="dots">
+              <span class="dot-lg" style="background:${p.gold}"></span>
+              <span class="dot-lg" style="background:${p.red}"></span>
+            </div>
+            <span class="swatch-label">${p.name}</span>${p.premium && !isPremium() ? '<span class="cat-pill premium-pill">Premium</span>' : ''}
+          </div>
+        `).join('')}
+      </div>
+      ${isPremium() ? `
+      <div class="settings-section-label">Custom colors</div>
+      <div class="color-input-row">
+        <label for="customGold">Primary accent</label>
+        <input type="color" id="customGold" value="${currentTheme.gold}">
+      </div>
+      <div class="color-input-row">
+        <label for="customRed">Secondary accent</label>
+        <input type="color" id="customRed" value="${currentTheme.red}">
+      </div>
+      <p class="settings-note">This only changes colors on this device. If you share this app's link with anyone, their color choice is separate from yours.</p>
+      ` : ''}
+      <div class="settings-section-label">Background photo</div>
+      <div class="avatar-row">
+        <div class="avatar-preview" style="${backgroundUri ? `background-image:url('${backgroundUri}');background-size:cover;background-position:center;` : ''}"></div>
+        <div>
+          <label class="btn btn-ghost cover-upload-btn">${backgroundUri?'Change photo':'Add photo'}<input type="file" accept="image/*" id="backgroundInput" style="display:none;"></label>
+          ${backgroundUri ? '<button type="button" class="btn btn-ghost" id="removeBackgroundBtn" style="margin-left:6px;">Remove</button>' : ''}
+        </div>
+      </div>
+      <p class="settings-note">This only changes the background on this device - a dark overlay is always applied so the app stays readable over any photo.</p>
+      <div class="settings-section-label">Currency</div>
+      <div class="theme-grid" id="currencyGrid">
+        ${CURRENCIES.map(c => `
+          <div class="theme-swatch ${c.code === currentCurrency ? 'active' : ''}" data-code="${c.code}">
+            <span class="swatch-label">${c.symbol} ${c.code}</span>
+          </div>
+        `).join('')}
+      </div>
+      <p class="settings-note">Used for the Price Tracker and collection value.</p>
+    `;
+  } else if(tab === 'milestones'){
+    tabContentHTML = `
+      <div class="settings-section-label">Rank</div>
+      ${rankCardHTML()}
+      <div class="settings-section-label">Milestones</div>
+      <div class="milestones-list">${milestonesListHTML()}</div>
+    `;
+  } else if(tab === 'preferences'){
+    tabContentHTML = `
+      <div class="settings-section-label">Display</div>
+      <div class="toggle-row">
+        <span>Show ratings</span>
+        <label class="switch"><input type="checkbox" id="toggleRatings" ${!hideRatings?'checked':''}><span class="switch-slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <span>Show community ratings</span>
+        <label class="switch"><input type="checkbox" id="toggleCommunityRatings" ${!hideCommunityRatings?'checked':''}><span class="switch-slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <span>Show milestone pop-ups</span>
+        <label class="switch"><input type="checkbox" id="toggleMilestoneToasts" ${!hideMilestoneToasts?'checked':''}><span class="switch-slider"></span></label>
+      </div>
+      <p class="settings-note">Turning these off only hides them - your ratings and milestone history stay intact and come back if you turn a toggle back on.</p>
+    `;
+  }
+
   modal.innerHTML = `
     <button class="modal-close" id="settingsCloseBtn">&times;</button>
-    ${!isPremium() ? `
-    <div class="name-block" style="margin-bottom:10px;">
-      <span class="name">Premium</span>
+    <div class="settings-tabs">
+      <button class="settings-tab-btn ${tab==='account'?'active':''}" data-tab="account">Account</button>
+      <button class="settings-tab-btn ${tab==='appearance'?'active':''}" data-tab="appearance">Appearance</button>
+      <button class="settings-tab-btn ${tab==='milestones'?'active':''}" data-tab="milestones">Milestones</button>
+      <button class="settings-tab-btn ${tab==='preferences'?'active':''}" data-tab="preferences">Preferences</button>
     </div>
-    <button type="button" class="btn btn-primary" id="openPaywallBtn" style="margin-bottom:20px;">Unlock Premium</button>
-    ` : `
-    <div class="name-block" style="margin-bottom:10px;"><span class="name">Premium</span></div>
-    <p style="color:var(--muted);font-size:13px;margin-top:-6px;margin-bottom:20px;">✓ Unlocked — thanks for supporting the app.</p>
-    `}
-    <div class="name-block" style="margin-bottom:10px;margin-top:20px;"><span class="name">Profile</span></div>
-    <div class="avatar-row">
-      <div class="avatar-preview" style="${avatarUri ? `background-image:url('${avatarUri}');background-size:cover;background-position:center;` : ''}"></div>
-      <div>
-        <label class="btn btn-ghost cover-upload-btn">${avatarUri?'Change avatar':'Add avatar'}<input type="file" accept="image/*" id="avatarInput" style="display:none;"></label>
-        ${avatarUri ? '<button type="button" class="btn btn-ghost" id="removeAvatarBtn" style="margin-left:6px;">Remove</button>' : ''}
-      </div>
-    </div>
-
-    <div class="name-block" style="margin-bottom:10px;margin-top:20px;"><span class="name">Theme</span></div>
-    <div class="settings-section-label">Presets</div>
-    <div class="theme-grid" id="themeGrid">
-      ${THEME_PRESETS.map((p, i) => `
-        <div class="theme-swatch ${isPresetActive(p) ? 'active' : ''}" data-idx="${i}">
-          <div class="dots">
-            <span class="dot-lg" style="background:${p.gold}"></span>
-            <span class="dot-lg" style="background:${p.red}"></span>
-          </div>
-          <span class="swatch-label">${p.name}</span>${p.premium && !isPremium() ? '<span class="cat-pill premium-pill">Premium</span>' : ''}
-        </div>
-      `).join('')}
-    </div>
-    <div class="settings-section-label">Currency</div>
-    <div class="theme-grid" id="currencyGrid">
-      ${CURRENCIES.map(c => `
-        <div class="theme-swatch ${c.code === currentCurrency ? 'active' : ''}" data-code="${c.code}">
-          <span class="swatch-label">${c.symbol} ${c.code}</span>
-        </div>
-      `).join('')}
-    </div>
-    <p class="settings-note">Used for the Price Tracker and collection value. This only changes the display on this device.</p>
-    <div class="settings-section-label">Milestones</div>
-    <div class="milestones-list">${milestonesListHTML()}</div>
-    ${isPremium() ? `
-    <div class="settings-section-label">Custom colors</div>
-    <div class="color-input-row">
-      <label for="customGold">Primary accent</label>
-      <input type="color" id="customGold" value="${currentTheme.gold}">
-    </div>
-    <div class="color-input-row">
-      <label for="customRed">Secondary accent</label>
-      <input type="color" id="customRed" value="${currentTheme.red}">
-    </div>
-    <p class="settings-note">This only changes colors on this device. If you share this app's link with anyone, their color choice is separate from yours.</p>
-    ` : ''}
-
-    <div class="settings-section-label">Account</div>
-    <div class="auth-field auth-password-field">
-      <input type="password" id="settingsNewPassword" placeholder="New password">
-      <button type="button" class="auth-eye-btn" id="settingsPwEyeBtn" aria-label="Show password">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
-      </button>
-    </div>
-    <button class="btn btn-ghost" id="settingsUpdatePasswordBtn" style="width:100%;margin-bottom:6px;">Change password</button>
-    <div id="settingsAccountMsg" style="font-size:12px;color:var(--muted);min-height:16px;"></div>
-    <div class="edit-actions" style="justify-content:flex-start;flex-wrap:wrap;margin-top:10px;">
-      <button class="btn btn-ghost" id="settingsSignOutBtn">Sign out</button>
-      <button class="btn btn-danger" id="settingsDeleteAccountBtn">Delete account</button>
-    </div>
+    <div class="settings-tab-content">${tabContentHTML}</div>
   `;
-  function showAccountMsg(msg){ document.getElementById('settingsAccountMsg').textContent = msg; }
-  document.getElementById('settingsPwEyeBtn').addEventListener('click', ()=>{
+
+  document.getElementById('settingsCloseBtn').addEventListener('click', closeSettings);
+  modal.querySelectorAll('.settings-tab-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      currentSettingsTab = btn.dataset.tab;
+      renderSettings();
+    });
+  });
+
+  function showAccountMsg(msg){ const el = document.getElementById('settingsAccountMsg'); if(el) el.textContent = msg; }
+  const pwEyeBtn = document.getElementById('settingsPwEyeBtn');
+  if(pwEyeBtn) pwEyeBtn.addEventListener('click', ()=>{
     const pwInput = document.getElementById('settingsNewPassword');
     pwInput.type = pwInput.type === 'text' ? 'password' : 'text';
   });
-  document.getElementById('settingsUpdatePasswordBtn').addEventListener('click', async ()=>{
+  const updatePwBtn = document.getElementById('settingsUpdatePasswordBtn');
+  if(updatePwBtn) updatePwBtn.addEventListener('click', async ()=>{
     const newPw = document.getElementById('settingsNewPassword').value;
     if(!newPw){ showAccountMsg('Enter a new password.'); return; }
     try{
@@ -3000,13 +3346,16 @@ function renderSettings(){
       showAccountMsg(e.message || "Couldn't update password.");
     }
   });
-  document.getElementById('settingsSignOutBtn').addEventListener('click', ()=>{
+  const signOutBtn = document.getElementById('settingsSignOutBtn');
+  if(signOutBtn) signOutBtn.addEventListener('click', ()=>{
     closeSettings();
     signOutOfAccount();
   });
-  document.getElementById('settingsDeleteAccountBtn').addEventListener('click', deleteMyAccount);
-  document.getElementById('settingsCloseBtn').addEventListener('click', closeSettings);
-  document.getElementById('avatarInput').addEventListener('change', async (ev)=>{
+  const deleteAccountBtn = document.getElementById('settingsDeleteAccountBtn');
+  if(deleteAccountBtn) deleteAccountBtn.addEventListener('click', deleteMyAccount);
+
+  const avatarInput = document.getElementById('avatarInput');
+  if(avatarInput) avatarInput.addEventListener('change', async (ev)=>{
     const file = ev.target.files[0];
     if(!file) return;
     try{
@@ -3022,7 +3371,28 @@ function renderSettings(){
     await deleteCoverRemote('__avatar__');
     renderSettings();
   });
-  modal.querySelectorAll('.theme-swatch').forEach(sw=>{
+
+  const backgroundInput = document.getElementById('backgroundInput');
+  if(backgroundInput) backgroundInput.addEventListener('change', async (ev)=>{
+    const file = ev.target.files[0];
+    if(!file) return;
+    try{
+      const dataUri = await readAndCompressImage(file, 1600); // larger than covers/avatar - this fills the whole screen
+      coverCache['__background__'] = dataUri;
+      applyCustomBackground(dataUri);
+      await saveCoverRemote('__background__', dataUri);
+      renderSettings();
+    }catch(err){ /* ignore */ }
+  });
+  const removeBackgroundBtn = document.getElementById('removeBackgroundBtn');
+  if(removeBackgroundBtn) removeBackgroundBtn.addEventListener('click', async ()=>{
+    delete coverCache['__background__'];
+    applyCustomBackground(null);
+    await deleteCoverRemote('__background__');
+    renderSettings();
+  });
+
+  modal.querySelectorAll('.theme-swatch[data-idx]').forEach(sw=>{
     sw.addEventListener('click', async ()=>{
       const preset = THEME_PRESETS[Number(sw.dataset.idx)];
       if(preset.premium && !isPremium()){ showPaywall(); return; }
@@ -3049,9 +3419,26 @@ function renderSettings(){
   if(redInput) redInput.addEventListener('input', ()=>{
     saveTheme({gold: currentTheme.gold, red: redInput.value});
   });
+
+  const toggleRatingsEl = document.getElementById('toggleRatings');
+  if(toggleRatingsEl) toggleRatingsEl.addEventListener('change', async (ev)=>{
+    await setDisplayToggle('hideRatings', !ev.target.checked);
+    if(modalId) renderModal();
+    renderCollection();
+  });
+  const toggleCommunityEl = document.getElementById('toggleCommunityRatings');
+  if(toggleCommunityEl) toggleCommunityEl.addEventListener('change', async (ev)=>{
+    await setDisplayToggle('hideCommunityRatings', !ev.target.checked);
+    if(modalId) renderModal();
+  });
+  const toggleMilestoneToastsEl = document.getElementById('toggleMilestoneToasts');
+  if(toggleMilestoneToastsEl) toggleMilestoneToastsEl.addEventListener('change', async (ev)=>{
+    await setDisplayToggle('hideMilestoneToasts', !ev.target.checked);
+  });
 }
 
 function openSettings(){
+  currentSettingsTab = 'account';
   renderSettings();
   document.getElementById('settingsOverlay').classList.add('open');
 }
@@ -3345,6 +3732,10 @@ async function enterApp(user){
   await loadCloudPreferences();
   renderCollection();
   checkMilestones();
+  // Fires in the background, not awaited - the first render uses whatever
+  // rate (if any) was already cached locally, then re-renders once a
+  // fresh one arrives so numbers correct themselves without blocking load.
+  refreshExchangeRates().then(()=> renderCollection());
 }
 
 document.getElementById('exitTutorialBtn').addEventListener('click', ()=>{
@@ -3415,6 +3806,7 @@ window.addEventListener('online', updateSyncStatus);
 async function boot(){
   await loadTheme();
   await loadCurrency();
+  await loadDisplayToggles();
 
   renderAuthForm();
 
