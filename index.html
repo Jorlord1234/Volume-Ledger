@@ -692,6 +692,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 .vol-menu button.vm-missing.active{background:var(--tick-empty);}
 .vol-menu button.vm-planned.active{background:var(--tick-empty);border:1px dashed var(--muted);}
 .vol-menu button.vm-price{background:var(--surface);color:var(--gold);}
+.vol-menu button.vm-remove{color:var(--red);}
 
 /* VOLUME EDIT GRID */
 .vol-editor{
@@ -1353,11 +1354,6 @@ function ensureVolumes(e){
     }
     e.total = total;
   } else {
-    // 'planned' placeholders are kept - only real 'missing' gaps (which
-    // shouldn't occur on ongoing series, but may from old data) get stripped.
-    if(e.volumes.some(v => v === 'missing')){
-      e.volumes = e.volumes.filter(v => v !== 'missing');
-    }
     delete e.total;
   }
 }
@@ -2061,12 +2057,14 @@ function countsText(e){
   const owned = countOwned(e);
   const ordered = countOrdered(e);
   const planned = countPlanned(e);
+  const missing = e.volumes.filter(v=>v==='missing').length;
   let s;
   if(e.status === 'completed'){
     s = `<b>${owned}</b> / ${e.total}`;
   } else {
     s = `<b>${owned}</b> owned`;
     if(ordered > 0) s += ` <span style="color:var(--blue)">· ${ordered} ordered</span>`;
+    if(missing > 0) s += ` <span style="color:var(--tick-empty)">· ${missing} missing</span>`;
     if(planned > 0) s += ` <span style="color:var(--muted)">· ${planned} planned</span>`;
   }
   if(isPremium()) s += ` <span style="color:var(--gold)">· ${formatCurrency(seriesValue(e))}</span>`;
@@ -2273,8 +2271,9 @@ function showVolumeMenu(el, entry, idx){
     <button class="vm-owned ${current==='owned'?'active':''}" data-status="owned">Owned</button>
     <button class="vm-ordered ${current==='ordered'?'active':''}" data-status="ordered">Ordered</button>
     <button class="vm-planned ${current==='planned'?'active':''}" data-status="planned">Plan to buy</button>
+    <button class="vm-missing ${current==='missing'?'active':''}" data-status="missing">Missing</button>
     ${priceBtnHTML}
-    <button class="vm-missing" data-action="remove">Remove</button>
+    <button class="vm-remove" data-action="remove">Remove</button>
   ` : `
     <button class="vm-owned ${current==='owned'?'active':''}" data-status="owned">Owned</button>
     <button class="vm-ordered ${current==='ordered'?'active':''}" data-status="ordered">Ordered</button>
@@ -2434,7 +2433,7 @@ function detailHTML(e){
       <span><span class="dot owned"></span> Owned</span>
       <span><span class="dot ordered"></span> Ordered</span>
       ${e.status==='ongoing' ? '<span><span class="dot planned"></span> Plan to buy</span>' : ''}
-      ${e.status==='completed' ? '<span><span class="dot missing"></span> Missing</span>' : ''}
+      <span><span class="dot missing"></span> Missing</span>
       <span>Tap a spine to set its status</span>
     </div>`;
 }
@@ -2959,7 +2958,7 @@ async function showBarcodeScanner(onResult){
   // permission itself - granting permission doesn't fix this). Detecting
   // it upfront avoids a confusing generic error and a doomed attempt.
   const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent);
-  const isStandalone = window.navigator.standalone === true;
+  const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
   if(isIOS && isStandalone){
     alert("Scanning doesn't work when this app is opened from the home screen icon on iPhone - that's an Apple/iOS limitation with installed web apps, not a setting you can fix here. Open this same page in Safari directly (not the home screen icon) to use the scanner, then come back to the icon for everything else.");
     return;
@@ -3023,7 +3022,15 @@ async function showBarcodeScanner(onResult){
     // etc.) - whatever shows up here is the real next clue.
     const name = err && err.name ? err.name : 'UnknownError';
     const message = err && err.message ? err.message : String(err);
-    if(errorEl) errorEl.textContent = `Camera error: ${name} - ${message}`;
+    let text = `Camera error: ${name} - ${message}`;
+    // Safety net: if this is a permission-flavored error on iOS specifically,
+    // it's very likely the same installed-app camera bug, even if the
+    // earlier standalone check didn't catch it - point at the real cause
+    // rather than leaving someone thinking it's an actual permission setting.
+    if(isIOS && (name === 'NotAllowedError' || name === 'SecurityError')){
+      text += ' - if this is the installed home screen app, this is a known iPhone limitation with installed web apps, not a real permission problem. Try opening the page in Safari directly instead.';
+    }
+    if(errorEl) errorEl.textContent = text;
     console.error('Barcode scanner camera error:', err);
   });
 }
