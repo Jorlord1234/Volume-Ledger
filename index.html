@@ -264,9 +264,15 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .tile-favorite{
   position:absolute;top:8px;left:8px;z-index:1;
-  color:var(--gold);
-  font-size:16px;
-  text-shadow:0 1px 3px rgba(0,0,0,0.7);
+  width:26px;height:26px;border-radius:50%;
+  background:var(--red);
+  color:#fff;
+  font-size:14px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border:2px solid rgba(255,255,255,0.2);
+  box-shadow:0 2px 6px rgba(0,0,0,0.5);
 }
 
 /* LIST VIEW */
@@ -448,23 +454,16 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
 }
 .name-block{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .favorite-btn{
-  background:var(--surface-alt);
-  border:1px solid var(--border);
-  border-radius:50%;
-  width:30px;
-  height:30px;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
+  background:none;
+  border:none;
   color:var(--muted);
-  font-size:16px;
+  font-size:20px;
   line-height:1;
   cursor:pointer;
-  padding:0;
-  flex-shrink:0;
+  padding:0 2px;
 }
-.favorite-btn:hover{border-color:var(--red);color:var(--red);}
-.favorite-btn.active{background:var(--red);border-color:var(--red);color:#fff;}
+.favorite-btn.active{color:var(--red);}
+.favorite-btn:hover{opacity:0.8;}
 .rating-picker{display:flex;gap:2px;font-size:18px;line-height:1;cursor:pointer;color:var(--gold);}
 .rating-star{transition:transform .1s;}
 .rating-star:hover{transform:scale(1.15);}
@@ -509,6 +508,18 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
   margin-bottom:6px;
 }
 .rank-bar-fill{height:100%;background:var(--gold);transition:width .3s;}
+.insight-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:baseline;
+  gap:10px;
+  padding:10px 0;
+  border-bottom:1px solid var(--border);
+  font-size:13px;
+}
+.insight-row:last-of-type{border-bottom:none;}
+.insight-label{color:var(--muted);}
+.insight-value{color:var(--text);font-weight:600;text-align:right;}
 
 .private-check{
   display:flex;
@@ -1054,6 +1065,7 @@ input[type="text"]:focus, select:focus, textarea:focus{border-color:var(--gold);
       <option value="progress-desc">Sort: Most complete</option>
       <option value="progress-asc">Sort: Least complete</option>
       <option value="owned-desc">Sort: Most owned</option>
+      <option value="value-desc" id="sortValueOption" style="display:none;">Sort: Most valuable</option>
     </select>
     <div class="view-toggle">
       <button id="viewGridBtn" class="active">Grid</button>
@@ -1953,6 +1965,76 @@ function rankCardHTML(){
   `;
 }
 
+/* ============================================================
+   COLLECTION INSIGHTS (premium)
+   Built entirely on data premium users already have (price tracker
+   data) - no new gating, just more depth on top of what they're
+   already paying for. Lesson from researching Discogs' equivalent
+   feature: their users get frustrated when unpriced items are
+   silently excluded from stats without explanation, so this always
+   states how many volumes/series had no price to work with.
+   ============================================================ */
+function collectionInsights(){
+  let pricedOwnedCount = 0, unpricedOwnedCount = 0, totalOwnedValue = 0;
+  let biggestEntry = null, biggestIdx = null, biggestAmt = 0;
+  let mostValuableEntry = null, mostValuableAmt = 0;
+  let closestEntry = null, closestRemainingCost = Infinity;
+
+  entries.forEach(e => {
+    const val = seriesValue(e);
+    if(val > mostValuableAmt){ mostValuableAmt = val; mostValuableEntry = e; }
+
+    e.volumes.forEach((status, idx) => {
+      if(status !== 'owned') return;
+      const p = volumePrice(e, idx);
+      if(p > 0){
+        pricedOwnedCount++;
+        totalOwnedValue += p;
+        if(p > biggestAmt){ biggestAmt = p; biggestEntry = e; biggestIdx = idx; }
+      } else {
+        unpricedOwnedCount++;
+      }
+    });
+
+    if(e.status === 'completed' && !isComplete(e) && e.pricePerVolume){
+      const remaining = e.volumes.reduce((sum, s, i) => s !== 'owned' ? sum + volumePrice(e, i) : sum, 0);
+      if(remaining > 0 && remaining < closestRemainingCost){
+        closestRemainingCost = remaining;
+        closestEntry = e;
+      }
+    }
+  });
+
+  const avgPrice = pricedOwnedCount > 0 ? totalOwnedValue / pricedOwnedCount : 0;
+  return { pricedOwnedCount, unpricedOwnedCount, avgPrice, biggestEntry, biggestIdx, biggestAmt, mostValuableEntry, mostValuableAmt, closestEntry, closestRemainingCost };
+}
+
+function insightsHTML(){
+  const i = collectionInsights();
+  const totalOwnedTracked = i.pricedOwnedCount + i.unpricedOwnedCount;
+  if(totalOwnedTracked === 0){
+    return `<p class="settings-note">No owned books yet - insights will show up once you've tracked a few.</p>`;
+  }
+  const rows = [];
+  if(i.mostValuableEntry) rows.push(['Most valuable series', `${escapeHTML(i.mostValuableEntry.name)} — ${formatCurrency(i.mostValuableAmt)}`]);
+  if(i.biggestEntry) rows.push(['Biggest single purchase', `${escapeHTML(i.biggestEntry.name)} vol. ${volNum(i.biggestEntry, i.biggestIdx)} — ${formatCurrency(i.biggestAmt)}`]);
+  if(i.pricedOwnedCount > 0) rows.push(['Average price per book', formatCurrency(i.avgPrice)]);
+  if(i.closestEntry) rows.push(['Closest to complete by cost', `${escapeHTML(i.closestEntry.name)} — ${formatCurrency(i.closestRemainingCost)} left to finish it`]);
+
+  const rowsHTML = rows.map(([label, value]) => `
+    <div class="insight-row">
+      <span class="insight-label">${label}</span>
+      <span class="insight-value">${value}</span>
+    </div>
+  `).join('');
+
+  const completenessNote = i.unpricedOwnedCount > 0
+    ? `<p class="settings-note">${i.unpricedOwnedCount} of ${totalOwnedTracked} owned books don't have a price set, so they're left out of these numbers rather than counted as €0.</p>`
+    : `<p class="settings-note">Every owned book has a price set - these numbers reflect your full collection.</p>`;
+
+  return rowsHTML + completenessNote;
+}
+
 function milestonesListHTML(){
   const stats = {
     totalBooks: entries.reduce((sum,e)=> sum + countOwned(e), 0),
@@ -2039,6 +2121,7 @@ function getFiltered(){
   if(sortMode==='progress-desc') list.sort((a,b)=>progress(b)-progress(a));
   if(sortMode==='progress-asc') list.sort((a,b)=>progress(a)-progress(b));
   if(sortMode==='owned-desc') list.sort((a,b)=>countSecured(b)-countSecured(a));
+  if(sortMode==='value-desc' && isPremium()) list.sort((a,b)=>seriesValue(b)-seriesValue(a));
   return list;
 }
 
@@ -2137,6 +2220,14 @@ function renderHeaderStats(){
 
 function renderCollection(){
   renderHeaderStats();
+  const sortValueOption = document.getElementById('sortValueOption');
+  if(sortValueOption){
+    sortValueOption.style.display = isPremium() ? '' : 'none';
+    if(!isPremium() && sortMode === 'value-desc'){
+      sortMode = 'name';
+      document.getElementById('sort').value = 'name';
+    }
+  }
   const list = getFiltered();
   const container = document.getElementById('grid');
   const emptyEl = document.getElementById('emptyState');
@@ -3222,7 +3313,7 @@ function renderSettings(){
       <div class="name-block" style="margin-bottom:10px;"><span class="name">Premium</span></div>
       <p style="color:var(--muted);font-size:13px;margin-top:-6px;margin-bottom:20px;">✓ Unlocked — thanks for supporting the app.</p>
       `}
-      <div class="name-block" style="margin-bottom:10px;"><span class="name">Profile</span></div>
+      <div class="name-block" style="margin-bottom:10px;"><span class="name">Profile</span>${isPremium() ? '<span class="cat-pill premium-pill">Supporter</span>' : ''}</div>
       <div class="avatar-row">
         <div class="avatar-preview" style="${avatarUri ? `background-image:url('${avatarUri}');background-size:cover;background-position:center;` : ''}"></div>
         <div>
@@ -3296,6 +3387,15 @@ function renderSettings(){
       <div class="settings-section-label">Milestones</div>
       <div class="milestones-list">${milestonesListHTML()}</div>
     `;
+  } else if(tab === 'insights'){
+    tabContentHTML = isPremium() ? `
+      <div class="settings-section-label">Collection insights</div>
+      ${insightsHTML()}
+    ` : `
+      <div class="settings-section-label">Collection insights</div>
+      <p class="settings-note">Deeper stats about your collection's value - most valuable series, average price per book, and more. Part of Premium, since it builds on Price Tracker data.</p>
+      <button type="button" class="btn btn-primary" id="openPaywallBtnInsights" style="margin-top:8px;">Unlock Premium</button>
+    `;
   } else if(tab === 'preferences'){
     tabContentHTML = `
       <div class="settings-section-label">Display</div>
@@ -3321,6 +3421,7 @@ function renderSettings(){
       <button class="settings-tab-btn ${tab==='account'?'active':''}" data-tab="account">Account</button>
       <button class="settings-tab-btn ${tab==='appearance'?'active':''}" data-tab="appearance">Appearance</button>
       <button class="settings-tab-btn ${tab==='milestones'?'active':''}" data-tab="milestones">Milestones</button>
+      <button class="settings-tab-btn ${tab==='insights'?'active':''}" data-tab="insights">Insights</button>
       <button class="settings-tab-btn ${tab==='preferences'?'active':''}" data-tab="preferences">Preferences</button>
     </div>
     <div class="settings-tab-content">${tabContentHTML}</div>
@@ -3409,6 +3510,8 @@ function renderSettings(){
   });
   const openPaywallBtn = document.getElementById('openPaywallBtn');
   if(openPaywallBtn) openPaywallBtn.addEventListener('click', showPaywall);
+  const openPaywallBtnInsights = document.getElementById('openPaywallBtnInsights');
+  if(openPaywallBtnInsights) openPaywallBtnInsights.addEventListener('click', showPaywall);
 
   document.querySelectorAll('#currencyGrid .theme-swatch').forEach(sw=>{
     sw.addEventListener('click', async ()=>{
